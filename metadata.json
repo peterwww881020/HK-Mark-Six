@@ -1,0 +1,6 @@
+{
+  "name": "六合彩數據洞察 (HK Mark Six Insight)",
+  "description": "一個專為香港六合彩設計的應用程式，提供歷史數據分析、中獎號碼核對（支持獎金估算），以及高頻組合統計預測功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
