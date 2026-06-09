@@ -3,6 +3,7 @@ import { RefreshCw, Search, BarChart3, History, TrendingUp, Trophy, Languages } 
 import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { db, collection, getDocs, query, orderBy, limit } from './lib/firebase';
 
 const prizeValues: Record<string, number> = {
   "1st Prize": 8000000,
@@ -215,8 +216,12 @@ export default function App() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch('/api/history');
-      const data = await res.json();
+      const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
+      const snapshot = await getDocs(q);
+      const data: Draw[] = [];
+      snapshot.forEach(docSnap => {
+        data.push(docSnap.data() as Draw);
+      });
       setHistory(data);
     } catch (e) {
       console.error(e);
@@ -225,9 +230,34 @@ export default function App() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/stats');
-      const data = await res.json();
-      setStats(data);
+      const drawsCol = collection(db, 'draws');
+      const q = query(drawsCol, orderBy('date', 'desc'));
+      const snapshot = await getDocs(q);
+      
+      const allDraws: Draw[] = [];
+      snapshot.forEach(docSnap => {
+        allDraws.push(docSnap.data() as Draw);
+      });
+
+      const freqMap: Record<number, number> = {};
+      const extraFreqMap: Record<number, number> = {};
+      
+      allDraws.forEach(draw => {
+        [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
+          freqMap[n] = (freqMap[n] || 0) + 1;
+        });
+        extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
+      });
+
+      const stats = Object.entries(freqMap)
+        .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+        .sort((a, b) => b.frequency - a.frequency);
+
+      const extraStats = Object.entries(extraFreqMap)
+        .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+        .sort((a, b) => b.frequency - a.frequency);
+
+      setStats({ main: stats, extra: extraStats, totalDraws: allDraws.length });
     } catch (e) {
       console.error(e);
     }
@@ -245,7 +275,9 @@ export default function App() {
         fetchStats();
       }
     } catch (e) {
-      setUpdateMessage('Failed to connect to the server.');
+      setUpdateMessage('Direct scrape proxy mostly works in AI Studio or via Vercel Serverless Functions. Data synced automatically from DB.');
+      fetchHistory();
+      fetchStats();
     } finally {
       setIsUpdating(false);
       setTimeout(() => setUpdateMessage(''), 5000);
@@ -293,7 +325,7 @@ export default function App() {
     setCheckResults(null);
   };
 
-  const handleCheck = () => {
+  const handleCheck = async () => {
     if (selectedNumbers.length !== 6) return;
 
     if (selectedNumbers.join(',') === '5,6,7,8,9,10') {
@@ -315,30 +347,68 @@ export default function App() {
 
     setIsChecking(true);
     
-    setTimeout(() => {
+    try {
+      const drawsCol = collection(db, 'draws');
+      const q = query(drawsCol, orderBy('date', 'desc'));
+      const snapshot = await getDocs(q);
+      const allDraws: Draw[] = [];
+      snapshot.forEach(docSnap => {
+        allDraws.push(docSnap.data() as Draw);
+      });
+
+      const results = allDraws.map((draw: Draw) => {
+        const drawNumbers = [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6];
+        const matchCount = numbersToCheck.filter(n => drawNumbers.includes(n)).length;
+        const extraMatch = numbersToCheck.includes(draw.extra_number);
+
+        let prize = "No Prize";
+        if (matchCount === 6) prize = "1st Prize";
+        else if (matchCount === 5 && extraMatch) prize = "2nd Prize";
+        else if (matchCount === 5) prize = "3rd Prize";
+        else if (matchCount === 4 && extraMatch) prize = "4th Prize";
+        else if (matchCount === 4) prize = "5th Prize";
+        else if (matchCount === 3 && extraMatch) prize = "6th Prize";
+        else if (matchCount === 3) prize = "7th Prize";
+
+        return {
+          date: draw.date,
+          draw_number: draw.draw_number,
+          drawNumbers,
+          extra: draw.extra_number,
+          matchCount,
+          extraMatch,
+          prize
+        };
+      }).filter(r => r.prize !== "No Prize");
+
+      const prizeOrder: Record<string, number> = {
+        "1st Prize": 1,
+        "2nd Prize": 2,
+        "3rd Prize": 3,
+        "4th Prize": 4,
+        "5th Prize": 5,
+        "6th Prize": 6,
+        "7th Prize": 7
+      };
       
-      // Perform the API call after blur delay
-      fetch('/api/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numbers: numbersToCheck })
-      })
-        .then(res => res.json())
-        .then(data => {
-          setCheckResults(data.wins || []);
-          setTimeout(() => {
-            setSelectedNumbers(numbersToCheck);
-            resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 100);
-        })
-        .catch(e => {
-          console.error(e);
-          setCheckResults([]);
-        })
-        .finally(() => {
-          setIsChecking(false);
-        });
-    }, 400);
+      results.sort((a, b) => {
+        const rankDiff = prizeOrder[a.prize] - prizeOrder[b.prize];
+        if (rankDiff !== 0) return rankDiff;
+        return b.date.localeCompare(a.date);
+      });
+
+      setCheckResults(results);
+      setTimeout(() => {
+        setSelectedNumbers(numbersToCheck);
+        resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+
+    } catch (e) {
+      console.error(e);
+      setCheckResults([]);
+    } finally {
+      setIsChecking(false);
+    }
   };
 
   const getForecast = () => {
