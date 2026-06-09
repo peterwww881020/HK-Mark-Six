@@ -4,8 +4,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
-const API_BASE_URL = 'https://ais-pre-324afruy6prucldyh27tq6-496705720933.asia-northeast1.run.app';
-
 const prizeValues: Record<string, number> = {
   "1st Prize": 8000000,
   "2nd Prize": 500000,
@@ -217,7 +215,7 @@ export default function App() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/history`);
+      const res = await fetch('/api/history');
       const data = await res.json();
       setHistory(data);
     } catch (e) {
@@ -227,7 +225,7 @@ export default function App() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stats`);
+      const res = await fetch('/api/stats');
       const data = await res.json();
       setStats(data);
     } catch (e) {
@@ -239,7 +237,7 @@ export default function App() {
     setIsUpdating(true);
     setUpdateMessage('');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/update`, { method: 'POST' });
+      const res = await fetch('/api/update', { method: 'POST' });
       const data = await res.json();
       setUpdateMessage(data.message);
       if (data.success) {
@@ -320,7 +318,7 @@ export default function App() {
     setTimeout(() => {
       
       // Perform the API call after blur delay
-      fetch(`${API_BASE_URL}/api/check`, {
+      fetch('/api/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ numbers: numbersToCheck })
