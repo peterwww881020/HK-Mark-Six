@@ -4,9 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
-const API_BASE_URL = window.location.hostname.includes('hkmarksixrecord.com') || window.location.hostname.includes('vercel.app')
-  ? 'https://ais-pre-324afruy6prucldyh27tq6-496705720933.asia-northeast1.run.app'
-  : '';
+const API_BASE_URL = 'https://ais-pre-324afruy6prucldyh27tq6-496705720933.asia-northeast1.run.app';
 
 const prizeValues: Record<string, number> = {
   "1st Prize": 8000000,
