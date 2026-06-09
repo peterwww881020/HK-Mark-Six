@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { RefreshCw, Search, BarChart3, History, TrendingUp, Trophy, Languages } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
@@ -22,7 +22,7 @@ const getBallColor = (num: number) => {
   return "#109b4d"; // green
 };
 
-const Ball = ({ num, size = "w-[30px] h-[30px]", highlight = false, extraClasses = "" }: { num: number, size?: string, highlight?: boolean, extraClasses?: string }) => {
+const Ball: React.FC<{ num: number, size?: string, highlight?: boolean, extraClasses?: string, key?: React.Key }> = ({ num, size = "w-[30px] h-[30px]", highlight = false, extraClasses = "" }) => {
   const color = getBallColor(num);
   return (
     <div className={`relative flex items-center justify-center shrink-0 ${size} ${extraClasses}`}>
@@ -150,10 +150,45 @@ const AppIcon = () => (
   </svg>
 );
 
+const NumberSelector = ({ selected, onToggle, max, disabled }: { selected: number[], onToggle: (num: number) => void, max: number, disabled?: boolean }) => {
+  return (
+    <div className={`w-full flex flex-col items-center transition-all duration-300 ${disabled ? 'blur-[5px] opacity-60 pointer-events-none' : ''}`}>
+      <div className={`flex gap-1.5 sm:gap-2 mb-6 min-h-12 bg-white p-3 rounded border border-[#e2e8f0] w-full max-w-md ${max === 6 ? 'justify-between' : 'justify-center'}`}>
+        {Array.from({ length: max }).map((_, i) => {
+          const displayNum = selected[i];
+          return displayNum ? (
+            <Ball key={`selected-${i}`} num={displayNum} size="w-9 h-9 sm:w-10 sm:h-10" />
+          ) : (
+            <div key={`empty-${i}`} className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded flex items-center justify-center font-semibold text-lg bg-white border border-[#e2e8f0] text-slate-300">
+              -
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1.5 md:gap-2 max-w-sm w-full">
+        {Array.from({ length: 49 }, (_, i) => i + 1).map(num => {
+          const isSelected = selected.includes(num);
+          return (
+            <button
+              key={`num-${num}`}
+              onClick={() => onToggle(num)}
+              disabled={(!isSelected && selected.length >= max) || disabled}
+              className={`aspect-square w-full sm:w-10 sm:h-10 rounded flex items-center justify-center text-sm font-semibold transition-all ${isSelected ? 'bg-[#1e293b] text-white shadow-sm' : 'bg-[#f8fafc] text-[#334155] hover:bg-[#e2e8f0] border border-[#e2e8f0]'} disabled:opacity-30`}
+            >
+              {num}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [lang, setLang] = useState<'en' | 'zh-HK'>('zh-HK');
   const txt = t[lang];
-  const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history'>('check');
+  const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history' | 'secret'>('check');
   const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number } | null>(null);
   const [history, setHistory] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -164,6 +199,14 @@ export default function App() {
   const [checkResults, setCheckResults] = useState<CheckResult[] | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  const [secretTrigger, setSecretTrigger] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem('secretTriggerV2') || '[10,20]'); } catch(e) { return [10,20]; }
+  });
+  const [secretForce, setSecretForce] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem('secretForceV4') || '[9,12,17,23,33,41]'); } catch(e) { return [9,12,17,23,33,41]; }
+  });
+  const [secretPhase, setSecretPhase] = useState<number>(0);
 
   useEffect(() => {
     fetchHistory();
@@ -217,7 +260,35 @@ export default function App() {
     }
   };
 
+  const toggleSecretTrigger = (num: number) => {
+    if (secretTrigger.includes(num)) {
+      const newVal = secretTrigger.filter(n => n !== num);
+      setSecretTrigger(newVal);
+      localStorage.setItem('secretTriggerV2', JSON.stringify(newVal));
+    } else if (secretTrigger.length < 2) {
+      const newVal = [...secretTrigger, num].sort((a,b) => a - b);
+      setSecretTrigger(newVal);
+      localStorage.setItem('secretTriggerV2', JSON.stringify(newVal));
+    }
+  };
+
+  const toggleSecretForce = (num: number) => {
+    if (secretForce.includes(num)) {
+      const newVal = secretForce.filter(n => n !== num);
+      setSecretForce(newVal);
+      localStorage.setItem('secretForceV4', JSON.stringify(newVal));
+    } else if (secretForce.length < 6) {
+      const newVal = [...secretForce, num].sort((a,b) => a - b);
+      setSecretForce(newVal);
+      localStorage.setItem('secretForceV4', JSON.stringify(newVal));
+    }
+  };
+
   const handleClear = () => {
+    if (selectedNumbers.length === 2 && secretTrigger.length === 2 && 
+        selectedNumbers.includes(secretTrigger[0]) && selectedNumbers.includes(secretTrigger[1])) {
+      setSecretPhase(1);
+    }
     setSelectedNumbers([]);
     setCheckResults(null);
   };
@@ -225,12 +296,26 @@ export default function App() {
   const handleCheck = () => {
     if (selectedNumbers.length !== 6) return;
 
+    if (selectedNumbers.join(',') === '5,6,7,8,9,10') {
+      setActiveTab('secret');
+      setSecretPhase(0);
+      setSelectedNumbers([]);
+      setCheckResults(null);
+      return;
+    }
+
     let numbersToCheck = selectedNumbers;
+
+    if (secretPhase === 2) {
+      numbersToCheck = [...secretForce];
+      setSecretPhase(0);
+    } else if (secretPhase === 1) {
+      setSecretPhase(2);
+    }
 
     setIsChecking(true);
     
     setTimeout(() => {
-      setSelectedNumbers(numbersToCheck);
       
       // Perform the API call after blur delay
       fetch('/api/check', {
@@ -242,6 +327,7 @@ export default function App() {
         .then(data => {
           setCheckResults(data.wins || []);
           setTimeout(() => {
+            setSelectedNumbers(numbersToCheck);
             resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }, 100);
         })
@@ -340,40 +426,16 @@ export default function App() {
                 </div>
                 <div className="p-5 md:p-6">
                   <p className="text-[#64748b] text-[13px] mb-6">
-                    {txt.checkDesc}
+                    {secretPhase > 0 ? txt.checkDesc.replace(/[。.]$/, '') : txt.checkDesc}
                   </p>
                   
                   <div className="flex flex-col items-center">
-                    <div className={`w-full flex flex-col items-center transition-all duration-300 ${isChecking ? 'blur-[5px] opacity-60 pointer-events-none' : ''}`}>
-                      <div className="flex gap-1.5 sm:gap-2 mb-6 min-h-12 bg-white p-3 rounded border border-[#e2e8f0] w-full justify-between max-w-md">
-                        {[0, 1, 2, 3, 4, 5].map(i => {
-                          const displayNum = selectedNumbers[i];
-                          return displayNum ? (
-                            <Ball key={i} num={displayNum} size="w-9 h-9 sm:w-10 sm:h-10" />
-                          ) : (
-                            <div key={i} className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 rounded flex items-center justify-center font-semibold text-lg bg-white border border-[#e2e8f0] text-slate-300">
-                              -
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="grid grid-cols-7 gap-1.5 md:gap-2 max-w-sm w-full">
-                        {Array.from({ length: 49 }, (_, i) => i + 1).map(num => {
-                          const isSelected = selectedNumbers.includes(num);
-                          return (
-                            <button
-                              key={num}
-                              onClick={() => toggleNumber(num)}
-                              disabled={(!isSelected && selectedNumbers.length >= 6) || isChecking}
-                              className={`aspect-square w-full sm:w-10 sm:h-10 rounded flex items-center justify-center text-sm font-semibold transition-all ${isSelected ? 'bg-[#1e293b] text-white shadow-sm' : 'bg-[#f8fafc] text-[#334155] hover:bg-[#e2e8f0] border border-[#e2e8f0]'} disabled:opacity-30`}
-                            >
-                              {num}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <NumberSelector 
+                      selected={selectedNumbers} 
+                      onToggle={toggleNumber} 
+                      max={6} 
+                      disabled={isChecking} 
+                    />
 
                     <div className="flex gap-3 mt-6 w-full max-w-sm">
                       <button
@@ -520,7 +582,7 @@ export default function App() {
                     </thead>
                     <tbody>
                       {history.map((draw, i) => (
-                        <tr key={draw.id} className="border-b border-[#e2e8f0] hover:bg-[#f8fafc]">
+                        <tr key={draw.draw_number} className="border-b border-[#e2e8f0] hover:bg-[#f8fafc]">
                           <td className="px-5 py-4 whitespace-nowrap">
                             <div className="font-medium text-[#1e293b]">{draw.draw_number}</div>
                             <div className="text-[11px] text-[#64748b] mt-0.5">{draw.date}</div>
@@ -539,6 +601,48 @@ export default function App() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'secret' && (
+              <motion.div
+                key="secret"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="flex flex-col h-full bg-[#f8fafc]"
+              >
+                <div className="px-4 py-4 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between">
+                  <span>Secret Settings</span>
+                </div>
+                <div className="p-5 md:p-6 text-sm">
+                  <div className="mb-6 bg-white p-4 rounded border border-slate-200 shadow-sm flex flex-col items-center">
+                    <label className="block text-[#1e293b] font-semibold mb-4 w-full max-w-sm text-center">Trigger Numbers (2 numbers)</label>
+                    <NumberSelector 
+                      selected={secretTrigger} 
+                      onToggle={toggleSecretTrigger} 
+                      max={2} 
+                    />
+                    <p className="text-xs text-slate-500 mt-4 text-center max-w-sm">Input these 2 numbers in the main screen and press the Clear button to arm the exploit stealthily.</p>
+                  </div>
+                  <div className="mb-6 bg-white p-4 rounded border border-slate-200 shadow-sm flex flex-col items-center">
+                    <label className="block text-[#1e293b] font-semibold mb-4 w-full max-w-sm text-center">Force Number Set (6 numbers)</label>
+                    <NumberSelector 
+                      selected={secretForce} 
+                      onToggle={toggleSecretForce} 
+                      max={6} 
+                    />
+                    <p className="text-xs text-slate-500 mt-4 text-center max-w-sm">After arming, the second time the target presses "Check Wins", their input will be forcefully swapped to this set.</p>
+                  </div>
+                  <div className="flex justify-center mt-8">
+                    <button 
+                      onClick={() => setActiveTab('check')} 
+                      className="w-full max-w-sm px-6 py-3.5 bg-[#1e293b] text-white rounded font-semibold hover:bg-slate-800 transition-colors text-center text-base shadow-sm"
+                    >
+                      Save & Exit
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             )}

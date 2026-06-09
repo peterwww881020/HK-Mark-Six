@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Draw": {
+      "title": "Draw",
+      "description": "A single lottery draw record.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "draw_number": { "type": "string" },
+        "n1": { "type": "number" },
+        "n2": { "type": "number" },
+        "n3": { "type": "number" },
+        "n4": { "type": "number" },
+        "n5": { "type": "number" },
+        "n6": { "type": "number" },
+        "extra_number": { "type": "number" }
+      },
+      "required": ["date", "draw_number", "n1", "n2", "n3", "n4", "n5", "n6", "extra_number"]
+    }
+  },
+  "firestore": {
+    "/draws/{drawId}": {
+      "schema": { "$ref": "#/entities/Draw" },
+      "description": "Historical mark six draws"
+    }
+  }
+}

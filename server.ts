@@ -1,28 +1,58 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import axios from "axios";
 import * as cheerio from "cheerio";
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import fs from "fs";
 
-const db = new Database("history.db");
+// Load Firebase Config
+const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+let firebaseConfig: any = {};
+if (fs.existsSync(configPath)) {
+  firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS draws (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT UNIQUE,
-    draw_number TEXT,
-    n1 INTEGER,
-    n2 INTEGER,
-    n3 INTEGER,
-    n4 INTEGER,
-    n5 INTEGER,
-    n6 INTEGER,
-    extra_number INTEGER
-  );
-`);
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+
+interface Draw {
+  date: string;
+  draw_number: string;
+  n1: number;
+  n2: number;
+  n3: number;
+  n4: number;
+  n5: number;
+  n6: number;
+  extra_number: number;
+}
 
 
+
+let cachedDraws: Draw[] = [];
+let isFetchingDraws = false;
+
+async function refreshCache() {
+  if (isFetchingDraws) return;
+  isFetchingDraws = true;
+  try {
+    const drawsCol = collection(db, 'draws');
+    const q = query(drawsCol, orderBy('date', 'desc'));
+    const snapshot = await getDocs(q);
+    const newDraws: Draw[] = [];
+    snapshot.forEach(docSnap => {
+      newDraws.push(docSnap.data() as Draw);
+    });
+    cachedDraws = newDraws;
+    console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+  } catch (err: any) {
+    console.error("Error fetching draws from firestore", err.message);
+  } finally {
+    isFetchingDraws = false;
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -32,33 +62,29 @@ async function startServer() {
 
   // API Routes
   app.get("/api/history", (req, res) => {
-    const draws = db.prepare("SELECT * FROM draws ORDER BY date DESC LIMIT 50").all();
-    res.json(draws);
+    res.json(cachedDraws.slice(0, 50));
   });
 
   app.get("/api/stats", (req, res) => {
-    const stats = db.prepare(`
-      SELECT num, count(*) as frequency FROM (
-        SELECT n1 as num FROM draws
-        UNION ALL SELECT n2 FROM draws
-        UNION ALL SELECT n3 FROM draws
-        UNION ALL SELECT n4 FROM draws
-        UNION ALL SELECT n5 FROM draws
-        UNION ALL SELECT n6 FROM draws
-      )
-      GROUP BY num
-      ORDER BY frequency DESC
-    `).all();
+    const freqMap: Record<number, number> = {};
+    const extraFreqMap: Record<number, number> = {};
+    
+    cachedDraws.forEach(draw => {
+      [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
+        freqMap[n] = (freqMap[n] || 0) + 1;
+      });
+      extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
+    });
 
-    const extraStats = db.prepare(`
-      SELECT extra_number as num, count(*) as frequency FROM draws
-      GROUP BY num
-      ORDER BY frequency DESC
-    `).all();
+    const stats = Object.entries(freqMap)
+      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+      .sort((a, b) => b.frequency - a.frequency);
 
-    const totalDraws = db.prepare("SELECT COUNT(*) as count FROM draws").get() as { count: number };
+    const extraStats = Object.entries(extraFreqMap)
+      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+      .sort((a, b) => b.frequency - a.frequency);
 
-    res.json({ main: stats, extra: extraStats, totalDraws: totalDraws.count });
+    res.json({ main: stats, extra: extraStats, totalDraws: cachedDraws.length });
   });
 
   app.post("/api/check", (req, res) => {
@@ -67,9 +93,7 @@ async function startServer() {
       return res.status(400).json({ error: "Please provide exactly 6 numbers." });
     }
 
-    const draws = db.prepare("SELECT * FROM draws ORDER BY date DESC").all() as any[];
-    
-    const results = draws.map(draw => {
+    const results = cachedDraws.map(draw => {
       const drawNumbers = [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6];
       const matchCount = numbers.filter(n => drawNumbers.includes(n)).length;
       const extraMatch = numbers.includes(draw.extra_number);
@@ -114,50 +138,80 @@ async function startServer() {
 
   app.post("/api/update", async (req, res) => {
     try {
-      const response = await axios.get("https://en.lottolyzer.com/history/hong-kong/mark-six/page/1/per-page/50/summary-view", {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-      });
+      let totalCount = 0;
+      
+      const scrapeAll = async () => {
+        for (let page = 1; page <= 35; page++) {
+          try {
+            console.log(`Scraping page ${page}...`);
+            const response = await axios.get(`https://en.lottolyzer.com/history/hong-kong/mark-six/page/${page}/per-page/50/summary-view`, {
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              }
+            });
 
-      const $ = cheerio.load(response.data);
-      let count = 0;
-      const insertStmt = db.prepare(`
-        INSERT OR IGNORE INTO draws (date, draw_number, n1, n2, n3, n4, n5, n6, extra_number)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+            const $ = cheerio.load(response.data);
+            let pageCount = 0;
 
-      $("table tbody tr").each((i, el) => {
-        const tds = $(el).find("td");
-        if (tds.length >= 3) {
-          const drawNum = $(tds[0]).text().trim();
-          const date = $(tds[1]).text().trim();
-          
-          const numbersStr = $(tds[2]).text().trim();
-          const extraStr = $(tds[3]).text().trim();
-          
-          let numbers: number[] = numbersStr.split(",").map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-          const extra = parseInt(extraStr);
+            const rows = $("table tbody tr").toArray();
+            for (const el of rows) {
+              const tds = $(el).find("td");
+              if (tds.length >= 3) {
+                const drawNum = $(tds[0]).text().trim();
+                const rawDate = $(tds[1]).text().trim();
+                
+                const numbersStr = $(tds[2]).text().trim();
+                const extraStr = $(tds[3]).text().trim();
+                
+                let numbers: number[] = numbersStr.split(",").map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+                const extra = parseInt(extraStr);
 
-          if (numbers.length === 6 && !isNaN(extra)) {
-            numbers.sort((a, b) => a - b);
-            
-            // Format date if needed
-            const info = insertStmt.run(
-              new Date(date).toISOString().split("T")[0],
-              drawNum,
-              numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5], extra
-            );
-            if (info.changes > 0) count++;
+                if (numbers.length === 6 && !isNaN(extra)) {
+                  numbers.sort((a, b) => a - b);
+                  
+                  try {
+                    const dateStr = new Date(rawDate).toISOString().split("T")[0];
+                    const docId = drawNum.replace(/\//g, "-");
+                    
+                    const drawData: Draw = {
+                      date: dateStr,
+                      draw_number: drawNum,
+                      n1: numbers[0],
+                      n2: numbers[1],
+                      n3: numbers[2],
+                      n4: numbers[3],
+                      n5: numbers[4],
+                      n6: numbers[5],
+                      extra_number: extra
+                    };
+                    
+                    // Push to firestore
+                    await setDoc(doc(db, 'draws', docId), drawData, { merge: true });
+                    pageCount++;
+                    totalCount++;
+                  } catch(e) {}
+                }
+              }
+            }
+            if (pageCount === 0) break; // Reached end of available data
+            await new Promise(r => setTimeout(r, 500)); // Respectful delay
+          } catch (err: any) {
+            console.error("Failed on page", page, err.message);
+            break; // Stop on network error
           }
         }
-      });
+        console.log(`Firestore populated with ${totalCount} historical draws.`);
+        await refreshCache();
+      };
 
-      res.json({ success: true, updated: count, message: count > 0 ? `Scraped ${count} new draws.` : "No new draws found or scraper failed to parse format. (Mock data is active)" });
+      // Run asynchronously
+      scrapeAll().catch(e => console.error("Background scrape failed:", e));
+
+      res.json({ success: true, message: "Started integrating ~10 years of historical data into Firestore in the background. It will be available shortly." });
     } catch (err: any) {
-      console.error("Scraping error:", err.message);
-      res.json({ success: false, message: "Failed to scrape the latest results due to network/access limitations, using existing historical database." });
+      console.error("Update initialization error:", err.message);
+      res.json({ success: false, message: "Failed to start data update process." });
     }
   });
 
@@ -178,6 +232,16 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Auto-populate database if empty and load cache
+    refreshCache().then(() => {
+      if (cachedDraws.length === 0) {
+        console.log("Firestore is empty. Triggering background scrape...");
+        axios.post(`http://127.0.0.1:${PORT}/api/update`, {}).catch(err => {
+          console.error("Auto-population failed:", err.message);
+        });
+      }
+    });
   });
 }
 
