@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://hkmarksixrecord.com/sitemap.xml
+Sitemap: http://www.hkmarksixrecord.com/sitemap.xml

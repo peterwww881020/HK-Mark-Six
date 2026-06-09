@@ -6,6 +6,7 @@ import * as cheerio from "cheerio";
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import fs from "fs";
+import cors from "cors";
 
 // Load Firebase Config
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
@@ -58,6 +59,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use(cors());
   app.use(express.json());
 
   // API Routes
