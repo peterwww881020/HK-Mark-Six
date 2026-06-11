@@ -423,29 +423,29 @@ export default function App() {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#f8fafc] text-slate-700 font-[Helvetica_Neue,Arial,sans-serif]">
-      <header className="bg-[#1e293b] text-white px-6 md:px-8 py-4 flex flex-col md:flex-row md:items-center justify-between border-b-4 border-[#b45309] gap-4 shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="bg-[#1e293b] text-white px-4 md:px-8 py-3 md:py-4 flex flex-row items-center justify-between border-b-4 border-[#b45309] gap-2 md:gap-4 shrink-0">
+        <div className="flex items-center gap-2 md:gap-3">
           <AppIcon />
           <div>
-            <h1 className="text-[18px] font-bold m-0 leading-tight tracking-tight">{txt.title}</h1>
-            <p className="text-[11px] opacity-80 m-0">{txt.subtitle}</p>
+            <h1 className="text-[14px] sm:text-[16px] md:text-[18px] font-bold m-0 leading-tight tracking-tight break-keep">{txt.title}</h1>
+            <p className="text-[10px] md:text-[11px] opacity-80 m-0 break-keep">{txt.subtitle}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
           <button 
             onClick={() => setLang(l => l === 'en' ? 'zh-HK' : 'en')}
-            className="flex items-center gap-2 px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-xs font-semibold cursor-pointer transition-colors"
+            className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap"
           >
             <Languages className="w-3 h-3" />
-            {lang === 'en' ? '中文' : 'English'}
+            <span>{lang === 'en' ? '中文' : 'English'}</span>
           </button>
           <button 
             onClick={handleUpdate}
             disabled={isUpdating}
-            className="flex items-center gap-2 px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50"
+            className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap"
           >
             <RefreshCw className={`w-3 h-3 ${isUpdating ? 'animate-spin' : ''}`} />
-            {isUpdating ? txt.updating : txt.sync}
+            <span className="hidden sm:inline">{isUpdating ? txt.updating : txt.sync}</span>
           </button>
         </div>
       </header>
