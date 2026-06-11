@@ -3,7 +3,10 @@ import { getFirestore, collection, doc, setDoc } from "firebase/firestore";
 import axios from "axios";
 import * as cheerio from "cheerio";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import firebaseConfig from "../firebase-applet-config.json";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const firebaseConfig = require("../firebase-applet-config.json");
 
 // Load Firebase Config from environment variable or fallback
 export default async function handler(req: VercelRequest, res: VercelResponse) {
