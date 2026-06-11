@@ -494,9 +494,6 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="flex flex-col h-full"
               >
-                <div className="px-4 py-4 border-b border-slate-200 bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between">
-                  <span>{txt.checkTitle}</span>
-                </div>
                 <div className="p-5 md:p-6">
                   <p className="text-[#64748b] text-[13px] mb-6">
                     {secretPhase > 0 ? txt.checkDesc.replace(/[。.]$/, '') : txt.checkDesc}
