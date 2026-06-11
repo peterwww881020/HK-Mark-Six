@@ -62,7 +62,7 @@ const t = {
     onDraw: "on Draw",
     estTotal: "Total Estimated Winnings",
     estValue: "Est.",
-    statsTitle: "Frequency Statistics (Top 15)",
+    statsTitle: "Frequency Statistics (Since {year}, Top 15)",
     totalDraws: "TOTAL DRAWS",
     forecastTitle: "Highly Forecasted Draw",
     forecastDesc: "These 6 numbers have historically appeared the most across all drawn prizes.",
@@ -100,7 +100,7 @@ const t = {
     onDraw: "於 第",
     estTotal: "估計總獎金",
     estValue: "大約",
-    statsTitle: "出現頻率統計（首15名）",
+    statsTitle: "出現頻率統計（從 {year} 至今的首 15 名）",
     totalDraws: "總期數",
     forecastTitle: "高頻預測組合",
     forecastDesc: "這 6 個號碼在所有歷史中獎結果中出現次數最高。",
@@ -190,7 +190,7 @@ export default function App() {
   const [lang, setLang] = useState<'en' | 'zh-HK'>('zh-HK');
   const txt = t[lang];
   const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history' | 'secret'>('check');
-  const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number } | null>(null);
+  const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(null);
   const [history, setHistory] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
@@ -257,7 +257,10 @@ export default function App() {
         .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
         .sort((a, b) => b.frequency - a.frequency);
 
-      setStats({ main: stats, extra: extraStats, totalDraws: allDraws.length });
+      const oldestDrawDate = allDraws[allDraws.length - 1]?.date;
+      const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '';
+
+      setStats({ main: stats, extra: extraStats, totalDraws: allDraws.length, oldestYear });
     } catch (e) {
       console.error(e);
     }
@@ -589,7 +592,7 @@ export default function App() {
                 className="flex flex-col h-full"
               >
                 <div className="px-4 py-4 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between">
-                  <span>{txt.statsTitle}</span>
+                  <span>{txt.statsTitle.replace('{year}', stats.oldestYear || '')}</span>
                   <span className="text-[10px]">{txt.totalDraws}: {stats.totalDraws}</span>
                 </div>
                 <div className="p-5 md:p-6 overflow-y-auto space-y-8">
