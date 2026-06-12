@@ -436,15 +436,15 @@ export default function App() {
             onClick={() => setLang(l => l === 'en' ? 'zh-HK' : 'en')}
             className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap"
           >
-            <Languages className="w-3 h-3" />
-            <span>{lang === 'en' ? '中文' : 'English'}</span>
+            <Languages className="w-4 h-4 md:w-3 md:h-3" />
+            <span className="hidden sm:inline">{lang === 'en' ? '中文' : 'English'}</span>
           </button>
           <button 
             onClick={handleUpdate}
             disabled={isUpdating}
             className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap"
           >
-            <RefreshCw className={`w-3 h-3 ${isUpdating ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 md:w-3 md:h-3 ${isUpdating ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{isUpdating ? txt.updating : txt.sync}</span>
           </button>
         </div>
