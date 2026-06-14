@@ -541,9 +541,14 @@ export default function App() {
                         </div>
                       </div>
                       {checkResults.length > 0 && (
-                        <div className="text-left md:text-right">
-                          <div className="text-[11px] text-[#64748b]">{txt.estTotal}</div>
-                          <div className="text-[16px] font-bold text-[#b45309]">HK${totalWinnings.toLocaleString()}</div>
+                        <div className="text-left md:text-right bg-gradient-to-br from-slate-900 to-slate-800 p-5 md:p-6 rounded-2xl border border-slate-700 shadow-2xl mt-6 md:mt-0 w-full md:w-auto transform transition-all hover:scale-105 hover:-translate-y-1">
+                          <div className="text-[18px] md:text-[22px] font-black uppercase tracking-wider mb-2 flex items-center justify-start md:justify-end gap-3 text-transparent bg-clip-text bg-[linear-gradient(90deg,#ff4b4b,#ff9000,#f0c000,#00e050,#2080ff,#9000ff)] drop-shadow-md">
+                            <span className="w-3 h-3 rounded-full bg-red-500 animate-[pulse_1s_ease-in-out_infinite]"></span>
+                            {txt.estTotal}
+                          </div>
+                          <div className="text-[40px] sm:text-[48px] md:text-[64px] font-black text-transparent bg-clip-text bg-[linear-gradient(90deg,#ff0000,#ff7f00,#ffff00,#00ff00,#0000ff,#4b0082,#8b00ff)] pb-2 leading-none drop-shadow-lg">
+                            <span className="text-[20px] md:text-[28px] mr-1 align-top text-gray-300 drop-shadow-none">HK$</span>{totalWinnings.toLocaleString()}
+                          </div>
                         </div>
                       )}
                     </div>
