@@ -3,7 +3,8 @@ import { RefreshCw, Search, BarChart3, History, TrendingUp, Trophy, Languages } 
 import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { db, collection, getDocs, query, orderBy, limit } from './lib/firebase';
+import { db, collection, getDocs, query, orderBy, limit, doc, setDoc } from './lib/firebase';
+
 
 const prizeValues: Record<string, number> = {
   "1st Prize": 8000000,
@@ -47,6 +48,7 @@ const t = {
     subtitle: "Historical Data Analysis",
     sync: "Sync Latest",
     updating: "Updating...",
+    uploadCsv: "Upload CSV",
     checkTab: "Check Numbers",
     statsTab: "Statistics",
     historyTab: "Recent Draws",
@@ -85,6 +87,7 @@ const t = {
     subtitle: "歷史數據分析",
     sync: "同步最新",
     updating: "更新中...",
+    uploadCsv: "匯入CSV",
     checkTab: "號碼核對",
     statsTab: "統計數據",
     historyTab: "近期攪珠",
@@ -287,6 +290,7 @@ export default function App() {
     }
   };
 
+
   const toggleNumber = (num: number) => {
     if (selectedNumbers.includes(num)) {
       setSelectedNumbers(selectedNumbers.filter(n => n !== num));
@@ -439,6 +443,7 @@ export default function App() {
             <Languages className="w-4 h-4 md:w-3 md:h-3" />
             <span className="hidden sm:inline">{lang === 'en' ? '中文' : 'English'}</span>
           </button>
+
           <button 
             onClick={handleUpdate}
             disabled={isUpdating}
