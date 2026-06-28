@@ -195,6 +195,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history' | 'secret'>('check');
   const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(null);
   const [history, setHistory] = useState<Draw[]>([]);
+  const [allDraws, setAllDraws] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
 
@@ -238,15 +239,15 @@ export default function App() {
       const q = query(drawsCol, orderBy('date', 'desc'));
       const snapshot = await getDocs(q);
       
-      const allDraws: Draw[] = [];
+      const allDrawsData: Draw[] = [];
       snapshot.forEach(docSnap => {
-        allDraws.push(docSnap.data() as Draw);
+        allDrawsData.push(docSnap.data() as Draw);
       });
 
       const freqMap: Record<number, number> = {};
       const extraFreqMap: Record<number, number> = {};
       
-      allDraws.forEach(draw => {
+      allDrawsData.forEach(draw => {
         [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
           freqMap[n] = (freqMap[n] || 0) + 1;
         });
@@ -261,10 +262,11 @@ export default function App() {
         .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
         .sort((a, b) => b.frequency - a.frequency);
 
-      const oldestDrawDate = allDraws[allDraws.length - 1]?.date;
+      const oldestDrawDate = allDrawsData[allDrawsData.length - 1]?.date;
       const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '';
 
-      setStats({ main: stats, extra: extraStats, totalDraws: allDraws.length, oldestYear });
+      setAllDraws(allDrawsData);
+      setStats({ main: stats, extra: extraStats, totalDraws: allDrawsData.length, oldestYear });
     } catch (e) {
       console.error(e);
     }
@@ -369,15 +371,20 @@ export default function App() {
     setIsChecking(true);
     
     try {
-      const drawsCol = collection(db, 'draws');
-      const q = query(drawsCol, orderBy('date', 'desc'));
-      const snapshot = await getDocs(q);
-      const allDraws: Draw[] = [];
-      snapshot.forEach(docSnap => {
-        allDraws.push(docSnap.data() as Draw);
-      });
+      let currentDraws = allDraws;
+      if (currentDraws.length === 0) {
+        const drawsCol = collection(db, 'draws');
+        const q = query(drawsCol, orderBy('date', 'desc'));
+        const snapshot = await getDocs(q);
+        const fetchedDraws: Draw[] = [];
+        snapshot.forEach(docSnap => {
+          fetchedDraws.push(docSnap.data() as Draw);
+        });
+        currentDraws = fetchedDraws;
+        setAllDraws(currentDraws);
+      }
 
-      const results = allDraws.map((draw: Draw) => {
+      const results = currentDraws.map((draw: Draw) => {
         const drawNumbers = [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6];
         const matchCount = numbersToCheck.filter(n => drawNumbers.includes(n)).length;
         const extraMatch = numbersToCheck.includes(draw.extra_number);
