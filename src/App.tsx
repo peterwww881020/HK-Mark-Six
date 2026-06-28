@@ -210,7 +210,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('secretTriggerV2') || '[10,20]'); } catch(e) { return [10,20]; }
   });
   const [secretForce, setSecretForce] = useState<number[]>(() => {
-    try { return JSON.parse(localStorage.getItem('secretForceV4') || '[9,12,17,23,33,41]'); } catch(e) { return [9,12,17,23,33,41]; }
+    try { return JSON.parse(localStorage.getItem('secretForceV5') || '[11,16,25,27,31,40]'); } catch(e) { return [11,16,25,27,31,40]; }
   });
   const [secretPhase, setSecretPhase] = useState<number>(0);
 
@@ -318,11 +318,11 @@ export default function App() {
     if (secretForce.includes(num)) {
       const newVal = secretForce.filter(n => n !== num);
       setSecretForce(newVal);
-      localStorage.setItem('secretForceV4', JSON.stringify(newVal));
+      localStorage.setItem('secretForceV5', JSON.stringify(newVal));
     } else if (secretForce.length < 6) {
       const newVal = [...secretForce, num].sort((a,b) => a - b);
       setSecretForce(newVal);
-      localStorage.setItem('secretForceV4', JSON.stringify(newVal));
+      localStorage.setItem('secretForceV5', JSON.stringify(newVal));
     }
   };
 
