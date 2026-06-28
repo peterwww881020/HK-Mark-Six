@@ -203,6 +203,7 @@ export default function App() {
   const [checkResults, setCheckResults] = useState<CheckResult[] | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const checkTabClicksRef = useRef<number[]>([]);
 
   const [secretTrigger, setSecretTrigger] = useState<number[]>(() => {
     try { return JSON.parse(localStorage.getItem('secretTriggerV2') || '[10,20]'); } catch(e) { return [10,20]; }
@@ -320,6 +321,19 @@ export default function App() {
       const newVal = [...secretForce, num].sort((a,b) => a - b);
       setSecretForce(newVal);
       localStorage.setItem('secretForceV4', JSON.stringify(newVal));
+    }
+  };
+
+  const handleCheckTabClick = () => {
+    setActiveTab('check');
+    const now = Date.now();
+    const recentClicks = checkTabClicksRef.current.filter(time => now - time < 2000);
+    recentClicks.push(now);
+    checkTabClicksRef.current = recentClicks;
+    
+    if (recentClicks.length >= 4) {
+      setSecretPhase(1);
+      checkTabClicksRef.current = [];
     }
   };
 
@@ -469,7 +483,7 @@ export default function App() {
         <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-[#e2e8f0] flex flex-row justify-around p-2 pb-[env(safe-area-inset-bottom,0.5rem)] shadow-[0_-4px_10px_rgba(0,0,0,0.03)] md:shadow-none md:p-0 md:pb-0 md:bg-transparent md:border-none md:static md:col-span-3 md:flex-col md:gap-2 md:justify-start">
           <TabButton 
             active={activeTab === 'check'} 
-            onClick={() => setActiveTab('check')}
+            onClick={handleCheckTabClick}
             icon={<Search className="w-4 h-4" />}
             label={txt.checkTab}
           />
