@@ -142,75 +142,68 @@ async function startServer() {
     try {
       let totalCount = 0;
       
-      const scrapeAll = async () => {
-        for (let page = 1; page <= 35; page++) {
-          try {
-            console.log(`Scraping page ${page}...`);
-            const response = await axios.get(`https://en.lottolyzer.com/history/hong-kong/mark-six/page/${page}/per-page/50/summary-view`, {
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              }
-            });
-
-            const $ = cheerio.load(response.data);
-            let pageCount = 0;
-
-            const rows = $("table tbody tr").toArray();
-            for (const el of rows) {
-              const tds = $(el).find("td");
-              if (tds.length >= 3) {
-                const drawNum = $(tds[0]).text().trim();
-                const rawDate = $(tds[1]).text().trim();
-                
-                const numbersStr = $(tds[2]).text().trim();
-                const extraStr = $(tds[3]).text().trim();
-                
-                let numbers: number[] = numbersStr.split(",").map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-                const extra = parseInt(extraStr);
-
-                if (numbers.length === 6 && !isNaN(extra)) {
-                  numbers.sort((a, b) => a - b);
-                  
-                  try {
-                    const dateStr = new Date(rawDate).toISOString().split("T")[0];
-                    const docId = drawNum.replace(/\//g, "-");
-                    
-                    const drawData: Draw = {
-                      date: dateStr,
-                      draw_number: drawNum,
-                      n1: numbers[0],
-                      n2: numbers[1],
-                      n3: numbers[2],
-                      n4: numbers[3],
-                      n5: numbers[4],
-                      n6: numbers[5],
-                      extra_number: extra
-                    };
-                    
-                    // Push to firestore
-                    await setDoc(doc(db, 'draws', docId), drawData, { merge: true });
-                    pageCount++;
-                    totalCount++;
-                  } catch(e) {}
-                }
-              }
+      const scrapeRecent = async () => {
+        try {
+          console.log(`Scraping recent draws from LotteryExtreme...`);
+          const response = await axios.get(`https://www.lotteryextreme.com/marksix/results`, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
-            if (pageCount === 0) break; // Reached end of available data
-            await new Promise(r => setTimeout(r, 500)); // Respectful delay
-          } catch (err: any) {
-            console.error("Failed on page", page, err.message);
-            break; // Stop on network error
+          });
+
+          const $ = cheerio.load(response.data);
+          const tbl = $('table').eq(4);
+          const rows = tbl.find('tr').toArray();
+          let currentDraw: any = null;
+          
+          for (const row of rows) {
+            if ($(row).hasClass('cy')) {
+              const text = $(row).text().trim();
+              const match = text.match(/(\d{2})\/(\d{2})\/(\d{4})[^\(]+\(([\d\/]+)\)/);
+              if (match) {
+                currentDraw = {
+                  date: `${match[3]}-${match[2]}-${match[1]}`,
+                  draw_number: match[4]
+                };
+              }
+            } else if (currentDraw && $(row).find('.displayball').length > 0) {
+              const lis = $(row).find('.displayball li').toArray();
+              const nums = [];
+              for (const li of lis) {
+                const n = parseInt($(li).text().trim());
+                if (!isNaN(n)) nums.push(n);
+              }
+              if (nums.length === 7) {
+                const docId = currentDraw.draw_number.replace(/\//g, "-");
+                const drawData: Draw = {
+                  date: currentDraw.date,
+                  draw_number: currentDraw.draw_number,
+                  n1: nums[0],
+                  n2: nums[1],
+                  n3: nums[2],
+                  n4: nums[3],
+                  n5: nums[4],
+                  n6: nums[5],
+                  extra_number: nums[6]
+                };
+                await setDoc(doc(db, 'draws', docId), drawData, { merge: true });
+                totalCount++;
+              }
+              currentDraw = null;
+            }
           }
+          console.log(`Firestore updated with ${totalCount} recent draws.`);
+          await refreshCache();
+        } catch (err: any) {
+          console.error("Background scrape failed:", err.message);
         }
-        console.log(`Firestore populated with ${totalCount} historical draws.`);
-        await refreshCache();
       };
 
       // Run asynchronously
-      scrapeAll().catch(e => console.error("Background scrape failed:", e));
+      scrapeRecent().catch(e => console.error("Background scrape failed:", e));
 
-      res.json({ success: true, message: "Started integrating ~10 years of historical data into Firestore in the background. It will be available shortly." });
+      res.json({ success: true, message: "Started integrating recent data into Firestore in the background. It will be available shortly." });
     } catch (err: any) {
       console.error("Update initialization error:", err.message);
       res.json({ success: false, message: "Failed to start data update process." });
