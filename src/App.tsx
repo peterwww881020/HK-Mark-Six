@@ -72,6 +72,11 @@ const t = {
     colDate: "Draw / Date",
     colNums: "Winning Numbers",
     colExtra: "Extra",
+    nextDrawNotice: "Next Draw",
+    nextDrawDetails: "Draw 26/104 Mid-Autumn Snowball (中秋金多寶) • 26 Sept 2026, 21:30 HKT (Est. 1st Prize: HK$68,000,000)",
+    scheduleNote: "Notice: The regular draw on 24 Sept was postponed and merged into the Mid-Autumn Snowball on 26 Sept.",
+    latestDrawLabel: "Latest Recorded Draw",
+    lastChecked: "Last synced",
     prize: {
       "1st Prize": "1st Prize",
       "2nd Prize": "2nd Prize",
@@ -111,6 +116,11 @@ const t = {
     colDate: "期數 / 日期",
     colNums: "中獎號碼",
     colExtra: "特別號碼",
+    nextDrawNotice: "下期攪珠預告",
+    nextDrawDetails: "第 26/104 期 中秋金多寶 • 2026年9月26日 晚上 9:30（估計頭獎基金高達 HK$68,000,000）",
+    scheduleNote: "特別提示：原定 9月24日 (星期四) 之常規攪珠暫停，合併順延至 9月26日 中秋金多寶。",
+    latestDrawLabel: "最新已開期數",
+    lastChecked: "最後更新",
     prize: {
       "1st Prize": "頭獎",
       "2nd Prize": "二獎",
@@ -198,6 +208,17 @@ export default function App() {
   const [allDraws, setAllDraws] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
+  const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [nextDrawInfo, setNextDrawInfo] = useState<any>({
+    draw_number: "26/104",
+    nameZh: "中秋金多寶",
+    nameEn: "Mid-Autumn Festival Snowball",
+    date: "2026-09-26",
+    time: "21:30 HKT",
+    estimatedFirstPrize: "HK$68,000,000",
+    noteZh: "原定 9月24日 (星期四) 之常規攪珠暫停，撥入今期中秋金多寶。",
+    noteEn: "The regular draw on 24 Sept was postponed and merged into the Mid-Autumn Snowball on 26 Sept."
+  });
 
   // Checker State
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
@@ -214,13 +235,18 @@ export default function App() {
   });
   const [secretPhase, setSecretPhase] = useState<number>(0);
 
-  useEffect(() => {
-    fetchHistory();
-    fetchStats();
-  }, []);
-
   const fetchHistory = async () => {
     try {
+      // Primary: Fast in-memory backend cache
+      const res = await fetch('/api/history?limit=50');
+      if (res.ok) {
+        const data: Draw[] = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setHistory(data);
+          return data;
+        }
+      }
+      // Direct Firestore fallback
       const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
       const snapshot = await getDocs(q);
       const data: Draw[] = [];
@@ -228,13 +254,42 @@ export default function App() {
         data.push(docSnap.data() as Draw);
       });
       setHistory(data);
+      return data;
     } catch (e) {
-      console.error(e);
+      console.error("fetchHistory fallback:", e);
+      try {
+        const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
+        const snapshot = await getDocs(q);
+        const data: Draw[] = [];
+        snapshot.forEach(docSnap => {
+          data.push(docSnap.data() as Draw);
+        });
+        setHistory(data);
+        return data;
+      } catch (err) {
+        console.error("Direct Firestore read error:", err);
+      }
     }
   };
 
   const fetchStats = async () => {
     try {
+      // Primary: Fast backend stats API
+      const res = await fetch('/api/stats');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.main && Array.isArray(data.main)) {
+          setStats({
+            main: data.main,
+            extra: data.extra,
+            totalDraws: data.totalDraws,
+            oldestYear: data.oldestYear || ''
+          });
+          return;
+        }
+      }
+
+      // Firestore calculation fallback
       const drawsCol = collection(db, 'draws');
       const q = query(drawsCol, orderBy('date', 'desc'));
       const snapshot = await getDocs(q);
@@ -268,9 +323,55 @@ export default function App() {
       setAllDraws(allDrawsData);
       setStats({ main: stats, extra: extraStats, totalDraws: allDrawsData.length, oldestYear });
     } catch (e) {
-      console.error(e);
+      console.error("fetchStats fallback:", e);
     }
   };
+
+  const checkRecent = async (force = false) => {
+    try {
+      const url = force ? '/api/update' : '/api/auto-sync';
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        if (data.nextDraw) {
+          setNextDrawInfo(data.nextDraw);
+        }
+        setLastSyncTime(new Date().toLocaleTimeString());
+        if (data.updatedCount > 0) {
+          await fetchHistory();
+          await fetchStats();
+        }
+      }
+    } catch (e) {
+      // Silently ignore background check errors
+    }
+  };
+
+  useEffect(() => {
+    fetchHistory();
+    fetchStats();
+
+    // Check status and sync state immediately on load
+    fetch('/api/status')
+      .then(res => res.json())
+      .then(status => {
+        if (status.nextDraw) setNextDrawInfo(status.nextDraw);
+        if (status.lastSyncTimestamp) {
+          setLastSyncTime(new Date(status.lastSyncTimestamp).toLocaleTimeString());
+        }
+      })
+      .catch(() => {});
+
+    checkRecent(false);
+
+    // Periodically verify and auto-sync prompt draws every 3 minutes while page is kept open
+    const interval = setInterval(() => {
+      checkRecent(false);
+    }, 3 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const handleUpdate = async () => {
     setIsUpdating(true);
@@ -278,18 +379,33 @@ export default function App() {
     try {
       const res = await fetch('/api/update', { method: 'POST' });
       const data = await res.json();
-      setUpdateMessage(data.message);
+      setLastSyncTime(new Date().toLocaleTimeString());
       if (data.success) {
-        fetchHistory();
-        fetchStats();
+        if (data.updatedCount > 0) {
+          setUpdateMessage(
+            lang === 'zh-HK'
+              ? `成功同步 ${data.updatedCount} 期最新攪珠！最新為第 ${data.latestDraw?.draw_number || ''} 期 (${data.latestDraw?.date || ''})`
+              : `Successfully updated ${data.updatedCount} new draw(s)! Latest: Draw ${data.latestDraw?.draw_number || ''} (${data.latestDraw?.date || ''})`
+          );
+        } else {
+          setUpdateMessage(
+            lang === 'zh-HK'
+              ? `已是最新攪珠數據！最新為第 ${data.latestDraw?.draw_number || ''} 期 (${data.latestDraw?.date || ''})`
+              : `Data is already up to date! Latest: Draw ${data.latestDraw?.draw_number || ''} (${data.latestDraw?.date || ''})`
+          );
+        }
+        await fetchHistory();
+        await fetchStats();
+      } else {
+        setUpdateMessage(data.message || (lang === 'zh-HK' ? '同步失敗，請稍後重試' : 'Update failed, please try again.'));
       }
     } catch (e) {
-      setUpdateMessage('Direct scrape proxy mostly works in AI Studio or via Vercel Serverless Functions. Data synced automatically from DB.');
+      setUpdateMessage(lang === 'zh-HK' ? '連線同步伺服器失敗，請稍後重試。' : 'Failed to connect to sync server.');
       fetchHistory();
       fetchStats();
     } finally {
       setIsUpdating(false);
-      setTimeout(() => setUpdateMessage(''), 5000);
+      setTimeout(() => setUpdateMessage(''), 8000);
     }
   };
 
@@ -669,8 +785,41 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="flex flex-col h-full"
               >
-                <div className="px-4 py-4 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between">
+                {/* Special schedule / upcoming draw banner */}
+                <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-amber-600 text-white rounded text-[11px] font-bold tracking-wide uppercase">
+                          {txt.nextDrawNotice}
+                        </span>
+                        <span className="text-xs font-semibold text-amber-950">
+                          {lang === 'zh-HK' ? nextDrawInfo?.nameZh : nextDrawInfo?.nameEn} ({nextDrawInfo?.draw_number})
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-950 mt-1 font-medium">
+                        {txt.nextDrawDetails}
+                      </p>
+                      <p className="text-[11px] text-amber-800/90 mt-0.5">
+                        {txt.scheduleNote}
+                      </p>
+                    </div>
+                    {lastSyncTime && (
+                      <div className="shrink-0 text-[11px] text-slate-600 bg-white/90 px-2.5 py-1 rounded border border-amber-200/60 flex items-center gap-1.5 self-start sm:self-auto">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span>{txt.lastChecked}: {lastSyncTime}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="px-4 py-3.5 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <span>{txt.recentTitle}</span>
+                  {history[0] && (
+                    <span className="text-xs font-normal normal-case text-slate-500">
+                      {txt.latestDrawLabel}: <strong className="text-slate-700">{history[0].draw_number}</strong> ({history[0].date})
+                    </span>
+                  )}
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-[13px] border-collapse">
