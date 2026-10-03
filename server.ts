@@ -454,14 +454,14 @@ async function startServer() {
       latestDraw: cachedDraws[0],
       lastSyncTimestamp,
       nextDraw: {
-        draw_number: "26/104",
-        nameZh: "中秋金多寶",
-        nameEn: "Mid-Autumn Festival Snowball",
-        date: "2026-09-26",
+        draw_number: "26/105",
+        nameZh: "多寶攪珠",
+        nameEn: "Rollover Draw",
+        date: "2026-10-03",
         time: "21:30 HKT",
-        estimatedFirstPrize: "HK$68,000,000",
-        noteZh: "原定2026-09-24之常規攪珠順延，合併至中秋金多寶攪珠",
-        noteEn: "The scheduled 24/09/2026 draw was postponed to the Mid-Autumn Snowball on 26/09/2026"
+        estimatedFirstPrize: "HK$98,000,000",
+        noteZh: "因中秋金多寶多寶累積，原定9月29日 (星期二) 及10月1日之常規攪珠暫停，累積至10月3日 (今晚) 攪珠。",
+        noteEn: "Due to Mid-Autumn Snowball rollover, draws on 29 Sept & 1 Oct were postponed to 3 Oct with estimated HK$98M first prize."
       }
     });
   });

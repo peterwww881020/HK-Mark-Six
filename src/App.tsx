@@ -73,8 +73,8 @@ const t = {
     colNums: "Winning Numbers",
     colExtra: "Extra",
     nextDrawNotice: "Next Draw",
-    nextDrawDetails: "Draw 26/104 Mid-Autumn Snowball (中秋金多寶) • 26 Sept 2026, 21:30 HKT (Est. 1st Prize: HK$68,000,000)",
-    scheduleNote: "Notice: The regular draw on 24 Sept was postponed and merged into the Mid-Autumn Snowball on 26 Sept.",
+    nextDrawDetails: "Draw 26/105 Rollover Draw • 3 Oct 2026 (Tonight), 21:30 HKT (Est. 1st Prize: HK$98,000,000)",
+    scheduleNote: "Notice: Regular draws on 29 Sept & 1 Oct were postponed due to Mid-Autumn Snowball rollover to 3 Oct.",
     latestDrawLabel: "Latest Recorded Draw",
     lastChecked: "Last synced",
     prize: {
@@ -117,8 +117,8 @@ const t = {
     colNums: "中獎號碼",
     colExtra: "特別號碼",
     nextDrawNotice: "下期攪珠預告",
-    nextDrawDetails: "第 26/104 期 中秋金多寶 • 2026年9月26日 晚上 9:30（估計頭獎基金高達 HK$68,000,000）",
-    scheduleNote: "特別提示：原定 9月24日 (星期四) 之常規攪珠暫停，合併順延至 9月26日 中秋金多寶。",
+    nextDrawDetails: "第 26/105 期 多寶攪珠 • 2026年10月3日 (今晚) 晚上 9:30（估計頭獎基金高達 HK$98,000,000）",
+    scheduleNote: "特別提示：因中秋金多寶多寶累積，原定 9月29日 (星期二) 及 10月1日 常規攪珠暫停，累積順延至 10月3日 (今晚) 攪珠。",
     latestDrawLabel: "最新已開期數",
     lastChecked: "最後更新",
     prize: {
@@ -210,14 +210,14 @@ export default function App() {
   const [updateMessage, setUpdateMessage] = useState('');
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [nextDrawInfo, setNextDrawInfo] = useState<any>({
-    draw_number: "26/104",
-    nameZh: "中秋金多寶",
-    nameEn: "Mid-Autumn Festival Snowball",
-    date: "2026-09-26",
+    draw_number: "26/105",
+    nameZh: "多寶攪珠",
+    nameEn: "Rollover Draw",
+    date: "2026-10-03",
     time: "21:30 HKT",
-    estimatedFirstPrize: "HK$68,000,000",
-    noteZh: "原定 9月24日 (星期四) 之常規攪珠暫停，撥入今期中秋金多寶。",
-    noteEn: "The regular draw on 24 Sept was postponed and merged into the Mid-Autumn Snowball on 26 Sept."
+    estimatedFirstPrize: "HK$98,000,000",
+    noteZh: "因中秋金多寶多寶累積，原定 9月29日 及 10月1日 常規攪珠暫停，累積至 10月3日 (今晚) 攪珠。",
+    noteEn: "Due to Mid-Autumn Snowball rollover, draws on 29 Sept & 1 Oct were postponed to 3 Oct with estimated HK$98M first prize."
   });
 
   // Checker State
@@ -378,9 +378,15 @@ export default function App() {
     setUpdateMessage('');
     try {
       const res = await fetch('/api/update', { method: 'POST' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       setLastSyncTime(new Date().toLocaleTimeString());
       if (data.success) {
+        if (data.nextDraw) {
+          setNextDrawInfo(data.nextDraw);
+        }
         if (data.updatedCount > 0) {
           setUpdateMessage(
             lang === 'zh-HK'
@@ -400,9 +406,23 @@ export default function App() {
         setUpdateMessage(data.message || (lang === 'zh-HK' ? '同步失敗，請稍後重試' : 'Update failed, please try again.'));
       }
     } catch (e) {
-      setUpdateMessage(lang === 'zh-HK' ? '連線同步伺服器失敗，請稍後重試。' : 'Failed to connect to sync server.');
-      fetchHistory();
-      fetchStats();
+      console.warn("Update API request failed, refreshing directly from database:", e);
+      try {
+        const hist = await fetchHistory();
+        await fetchStats();
+        setLastSyncTime(new Date().toLocaleTimeString());
+        if (hist && hist.length > 0) {
+          setUpdateMessage(
+            lang === 'zh-HK'
+              ? `已即時刷新資料庫數據！最新已開期數為第 ${hist[0].draw_number} 期 (${hist[0].date})`
+              : `Refreshed from database! Latest: Draw ${hist[0].draw_number} (${hist[0].date})`
+          );
+        } else {
+          setUpdateMessage(lang === 'zh-HK' ? '連線同步伺服器失敗，請稍後重試。' : 'Failed to connect to sync server.');
+        }
+      } catch (err) {
+        setUpdateMessage(lang === 'zh-HK' ? '連線同步伺服器失敗，請稍後重試。' : 'Failed to connect to sync server.');
+      }
     } finally {
       setIsUpdating(false);
       setTimeout(() => setUpdateMessage(''), 8000);
