@@ -105,7 +105,7 @@ async function scrapeFromLotteryHk(): Promise<Draw[]> {
 
 // Scraper 2: Lottery.hk Traditional Chinese mirror
 async function scrapeFromLotteryHkZh(): Promise<Draw[]> {
-  const res = await axios.get('https://lottery.hk/zh-hk/mark-six/results/', {
+  const res = await axios.get('https://lottery.hk/liuhecai/jieguo/', {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -196,11 +196,146 @@ async function scrapeFromLotteryExtreme(): Promise<Draw[]> {
   return results;
 }
 
+interface LatestPrizeMeta {
+  drawDate: string;
+  firstPrizeWinners: number;
+  firstPrizeAmount: string;
+  totalFund: string;
+}
+
+let cachedLatestPrizeMeta: LatestPrizeMeta | null = null;
+
+async function scrapeLatestPrizeMeta(drawDate: string): Promise<LatestPrizeMeta | null> {
+  try {
+    const res = await axios.get(`https://lottery.hk/en/mark-six/results/${drawDate}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 8000
+    });
+    const $ = cheerio.load(res.data);
+    let firstPrizeAmount = 'HK$8,000,000';
+    let firstPrizeWinners = -1;
+    let totalFund = '';
+
+    $('table tr').each((_, tr) => {
+      const tds = $(tr).find('td').map((__, td) => $(td).text().trim().replace(/\s+/g, ' ')).get();
+      if (tds.length >= 5 && tds[0] === '1st') {
+        firstPrizeAmount = tds[2] || 'HK$8,000,000';
+        const parsedWinners = parseFloat(tds[3]?.replace(/,/g, '') || '0');
+        if (!isNaN(parsedWinners)) {
+          firstPrizeWinners = parsedWinners;
+        }
+        totalFund = tds[4] || '';
+      }
+    });
+
+    if (firstPrizeWinners >= 0) {
+      const meta = { drawDate, firstPrizeWinners, firstPrizeAmount, totalFund };
+      cachedLatestPrizeMeta = meta;
+      return meta;
+    }
+  } catch (e: any) {
+    console.warn(`Could not fetch prize details for ${drawDate}:`, e.message);
+  }
+  return null;
+}
+
+function getNextDrawSchedule(latestDraw?: Draw) {
+  // Determine current HKT date
+  const nowHktStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' });
+  const nowHkt = new Date(nowHktStr);
+  const todayIso = `${nowHkt.getFullYear()}-${String(nowHkt.getMonth() + 1).padStart(2, '0')}-${String(nowHkt.getDate()).padStart(2, '0')}`;
+
+  // Compute next draw number from latest draw (e.g. "26/112" -> "26/113")
+  let nextDrawNumber = '26/113';
+  if (latestDraw?.draw_number) {
+    const parts = latestDraw.draw_number.split('/');
+    if (parts.length === 2) {
+      const yr = parts[0];
+      const seq = parseInt(parts[1], 10);
+      if (!isNaN(seq)) {
+        nextDrawNumber = `${yr}/${String(seq + 1).padStart(3, '0')}`;
+      }
+    }
+  }
+
+  // Start searching from whichever is later: latestDraw.date or yesterday in HKT
+  const baseDateStr = (!latestDraw?.date || latestDraw.date < todayIso) ? todayIso : latestDraw.date;
+  const [by, bm, bd] = baseDateStr.split('-').map(Number);
+  const cursor = new Date(Date.UTC(by, bm - 1, bd));
+
+  // If cursor is on or before latestDraw.date, or if cursor is today and HKT time is already past 21:35, advance at least 1 day
+  const isPastDrawTimeToday = nowHkt.getHours() > 21 || (nowHkt.getHours() === 21 && nowHkt.getMinutes() >= 35);
+
+  for (let i = 0; i < 14; i++) {
+    const iso = cursor.toISOString().slice(0, 10);
+    const dayOfWeek = cursor.getUTCDay(); // 0=Sun, 2=Tue, 4=Thu, 6=Sat
+    const isStandardDrawDay = dayOfWeek === 2 || dayOfWeek === 4 || dayOfWeek === 6 || dayOfWeek === 0;
+    const isAfterLatest = !latestDraw?.date || iso > latestDraw.date;
+    const isValidTodayOrFuture = iso > todayIso || (iso === todayIso && !isPastDrawTimeToday);
+
+    // Standard Mark Six draws are Tue (2), Thu (4), and weekend (usually Sat (6), or Sun (0))
+    if (isAfterLatest && isValidTodayOrFuture && (dayOfWeek === 2 || dayOfWeek === 4 || dayOfWeek === 6)) {
+      break;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  const nextIso = cursor.toISOString().slice(0, 10);
+  const [ny, nm, nd] = nextIso.split('-').map(Number);
+  const dayOfWeek = cursor.getUTCDay();
+  const weekdaysZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  const weekdaysEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const monthsEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const isTonight = nextIso === todayIso;
+  const dayLabelZh = `${ny}年${nm}月${nd}日 (${weekdaysZh[dayOfWeek]})${isTonight ? ' (今晚)' : ''}`;
+  const dayLabelEn = `${nd} ${monthsEn[nm - 1]} ${ny} (${weekdaysEn[dayOfWeek]})${isTonight ? ' (Tonight)' : ''}`;
+
+  const meta = (latestDraw && cachedLatestPrizeMeta?.drawDate === latestDraw.date) ? cachedLatestPrizeMeta : null;
+  const isRollover = meta ? meta.firstPrizeWinners === 0 : false;
+
+  const nameZh = isRollover ? '多寶攪珠' : '常規攪珠';
+  const nameEn = isRollover ? 'Rollover Draw' : 'Regular Draw';
+  const estimatedFirstPrize = isRollover ? 'HK$12,000,000+' : 'HK$8,000,000';
+
+  const detailsZh = `第 ${nextDrawNumber} 期 ${nameZh} • ${dayLabelZh} 晚上 9:30（估計頭獎基金 ${estimatedFirstPrize}）`;
+  const detailsEn = `Draw ${nextDrawNumber} ${nameEn} • ${dayLabelEn}, 21:30 HKT (Est. 1st Prize: ${estimatedFirstPrize})`;
+
+  let noteZh = `截止售票時間：攪珠日晚上 9:15 HKT。`;
+  let noteEn = `Ticket sales close at 21:15 HKT on draw day.`;
+
+  if (latestDraw) {
+    if (meta && meta.firstPrizeWinners > 0) {
+      noteZh = `上期 (${latestDraw.draw_number}) 頭獎有 ${meta.firstPrizeWinners} 注中（每注派 ${meta.firstPrizeAmount}），下期頭獎基金回復至 HK$8,000,000。截止售票：晚上 9:15。`;
+      noteEn = `Previous draw (${latestDraw.draw_number}) had ${meta.firstPrizeWinners} winning unit(s) (${meta.firstPrizeAmount}/unit). Next draw 1st prize resets to HK$8,000,000. Sales close at 21:15 HKT.`;
+    } else if (meta && meta.firstPrizeWinners === 0) {
+      noteZh = `上期 (${latestDraw.draw_number}) 無人中頭獎，多寶彩池累積滾存至下期攪珠！截止售票：晚上 9:15。`;
+      noteEn = `No 1st Prize winner in Draw ${latestDraw.draw_number}; jackpot rolls over to the next draw! Sales close at 21:15 HKT.`;
+    }
+  }
+
+  return {
+    draw_number: nextDrawNumber,
+    nameZh,
+    nameEn,
+    date: nextIso,
+    time: "21:30 HKT",
+    estimatedFirstPrize,
+    detailsZh,
+    detailsEn,
+    noteZh,
+    noteEn
+  };
+}
+
 interface SyncResult {
   success: boolean;
   updatedCount: number;
   totalDraws: number;
   latestDraw?: Draw;
+  nextDraw?: any;
   message: string;
   timestamp: number;
 }
@@ -277,14 +412,19 @@ async function doSync(): Promise<SyncResult> {
   }
 
   await refreshCache();
+  if (cachedDraws[0]?.date) {
+    await scrapeLatestPrizeMeta(cachedDraws[0].date);
+  }
   lastSyncTimestamp = Date.now();
-  console.log(`Sync completed: ${updatedCount} draws updated. Latest: ${cachedDraws[0]?.draw_number} (${cachedDraws[0]?.date})`);
+  const nextDraw = getNextDrawSchedule(cachedDraws[0]);
+  console.log(`Sync completed: ${updatedCount} draws updated. Latest: ${cachedDraws[0]?.draw_number} (${cachedDraws[0]?.date}), Next: ${nextDraw.draw_number} (${nextDraw.date})`);
 
   return {
     success: true,
     updatedCount,
     totalDraws: cachedDraws.length,
     latestDraw: cachedDraws[0],
+    nextDraw,
     message: updatedCount > 0 
       ? `Successfully updated ${updatedCount} new draw(s). Latest: Draw ${cachedDraws[0]?.draw_number} (${cachedDraws[0]?.date})` 
       : `Records are up to date. Latest: Draw ${cachedDraws[0]?.draw_number} (${cachedDraws[0]?.date})`,
@@ -306,6 +446,7 @@ async function syncRecentDraws(): Promise<SyncResult> {
         updatedCount: 0,
         totalDraws: cachedDraws.length,
         latestDraw: cachedDraws[0],
+        nextDraw: getNextDrawSchedule(cachedDraws[0]),
         message: `Failed to sync: ${err.message}`,
         timestamp: Date.now()
       };
@@ -362,6 +503,7 @@ async function startServer() {
       totalDraws: cachedDraws.length,
       oldestYear,
       latestDraw: cachedDraws[0],
+      nextDraw: getNextDrawSchedule(cachedDraws[0]),
       lastSyncTimestamp
     });
   });
@@ -439,6 +581,7 @@ async function startServer() {
         updatedCount: 0,
         totalDraws: cachedDraws.length,
         latestDraw: cachedDraws[0],
+        nextDraw: getNextDrawSchedule(cachedDraws[0]),
         message: "Data was recently synced.",
         timestamp: lastSyncTimestamp
       });
@@ -453,16 +596,7 @@ async function startServer() {
       totalDraws: cachedDraws.length,
       latestDraw: cachedDraws[0],
       lastSyncTimestamp,
-      nextDraw: {
-        draw_number: "26/105",
-        nameZh: "多寶攪珠",
-        nameEn: "Rollover Draw",
-        date: "2026-10-03",
-        time: "21:30 HKT",
-        estimatedFirstPrize: "HK$98,000,000",
-        noteZh: "因中秋金多寶多寶累積，原定9月29日 (星期二) 及10月1日之常規攪珠暫停，累積至10月3日 (今晚) 攪珠。",
-        noteEn: "Due to Mid-Autumn Snowball rollover, draws on 29 Sept & 1 Oct were postponed to 3 Oct with estimated HK$98M first prize."
-      }
+      nextDraw: getNextDrawSchedule(cachedDraws[0])
     });
   });
 

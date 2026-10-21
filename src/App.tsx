@@ -67,14 +67,13 @@ const t = {
     statsTitle: "Frequency Statistics (Since {year}, Top 15)",
     totalDraws: "TOTAL DRAWS",
     forecastTitle: "Highly Forecasted Draw",
-    forecastDesc: "These 6 numbers have historically appeared the most across all drawn prizes.",
+    forecastDesc: "These 6 numbers have historically appeared the most across all drawn prizes, ranked by appearance frequency.",
+    appearanceCount: "draws",
     recentTitle: "Recent Results",
     colDate: "Draw / Date",
     colNums: "Winning Numbers",
     colExtra: "Extra",
     nextDrawNotice: "Next Draw",
-    nextDrawDetails: "Draw 26/105 Rollover Draw • 3 Oct 2026 (Tonight), 21:30 HKT (Est. 1st Prize: HK$98,000,000)",
-    scheduleNote: "Notice: Regular draws on 29 Sept & 1 Oct were postponed due to Mid-Autumn Snowball rollover to 3 Oct.",
     latestDrawLabel: "Latest Recorded Draw",
     lastChecked: "Last synced",
     prize: {
@@ -111,14 +110,13 @@ const t = {
     statsTitle: "出現頻率統計（從 {year} 至今的首 15 名）",
     totalDraws: "總期數",
     forecastTitle: "高頻預測組合",
-    forecastDesc: "這 6 個號碼在所有歷史中獎結果中出現次數最高。",
+    forecastDesc: "這 6 個號碼在所有歷史中獎結果中出現次數最高，按出現頻率由高至低排列。",
+    appearanceCount: "次",
     recentTitle: "近期攪珠結果",
     colDate: "期數 / 日期",
     colNums: "中獎號碼",
     colExtra: "特別號碼",
     nextDrawNotice: "下期攪珠預告",
-    nextDrawDetails: "第 26/105 期 多寶攪珠 • 2026年10月3日 (今晚) 晚上 9:30（估計頭獎基金高達 HK$98,000,000）",
-    scheduleNote: "特別提示：因中秋金多寶多寶累積，原定 9月29日 (星期二) 及 10月1日 常規攪珠暫停，累積順延至 10月3日 (今晚) 攪珠。",
     latestDrawLabel: "最新已開期數",
     lastChecked: "最後更新",
     prize: {
@@ -209,16 +207,80 @@ export default function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
-  const [nextDrawInfo, setNextDrawInfo] = useState<any>({
-    draw_number: "26/105",
-    nameZh: "多寶攪珠",
-    nameEn: "Rollover Draw",
-    date: "2026-10-03",
-    time: "21:30 HKT",
-    estimatedFirstPrize: "HK$98,000,000",
-    noteZh: "因中秋金多寶多寶累積，原定 9月29日 及 10月1日 常規攪珠暫停，累積至 10月3日 (今晚) 攪珠。",
-    noteEn: "Due to Mid-Autumn Snowball rollover, draws on 29 Sept & 1 Oct were postponed to 3 Oct with estimated HK$98M first prize."
-  });
+  const [nextDrawInfo, setNextDrawInfo] = useState<any>(null);
+
+  const getDynamicNextDraw = (latestDraw?: Draw, serverNext?: any) => {
+    if (serverNext && serverNext.detailsZh && (!latestDraw?.date || serverNext.date > latestDraw.date)) {
+      return serverNext;
+    }
+
+    const nowHktStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' });
+    const nowHkt = new Date(nowHktStr);
+    const todayIso = `${nowHkt.getFullYear()}-${String(nowHkt.getMonth() + 1).padStart(2, '0')}-${String(nowHkt.getDate()).padStart(2, '0')}`;
+
+    let nextDrawNumber = '26/113';
+    if (latestDraw?.draw_number) {
+      const parts = latestDraw.draw_number.split('/');
+      if (parts.length === 2) {
+        const yr = parts[0];
+        const seq = parseInt(parts[1], 10);
+        if (!isNaN(seq)) {
+          nextDrawNumber = `${yr}/${String(seq + 1).padStart(3, '0')}`;
+        }
+      }
+    }
+
+    const baseDateStr = (!latestDraw?.date || latestDraw.date < todayIso) ? todayIso : latestDraw.date;
+    const [by, bm, bd] = baseDateStr.split('-').map(Number);
+    const cursor = new Date(Date.UTC(by, bm - 1, bd));
+    const isPastDrawTimeToday = nowHkt.getHours() > 21 || (nowHkt.getHours() === 21 && nowHkt.getMinutes() >= 35);
+
+    for (let i = 0; i < 14; i++) {
+      const iso = cursor.toISOString().slice(0, 10);
+      const dayOfWeek = cursor.getUTCDay();
+      const isAfterLatest = !latestDraw?.date || iso > latestDraw.date;
+      const isValidTodayOrFuture = iso > todayIso || (iso === todayIso && !isPastDrawTimeToday);
+
+      if (isAfterLatest && isValidTodayOrFuture && (dayOfWeek === 2 || dayOfWeek === 4 || dayOfWeek === 6)) {
+        break;
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    const nextIso = cursor.toISOString().slice(0, 10);
+    const [ny, nm, nd] = nextIso.split('-').map(Number);
+    const dayOfWeek = cursor.getUTCDay();
+    const weekdaysZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+    const weekdaysEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const monthsEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const isTonight = nextIso === todayIso;
+    const dayLabelZh = `${ny}年${nm}月${nd}日 (${weekdaysZh[dayOfWeek]})${isTonight ? ' (今晚)' : ''}`;
+    const dayLabelEn = `${nd} ${monthsEn[nm - 1]} ${ny} (${weekdaysEn[dayOfWeek]})${isTonight ? ' (Tonight)' : ''}`;
+
+    const nameZh = '常規攪珠';
+    const nameEn = 'Regular Draw';
+    const estimatedFirstPrize = 'HK$8,000,000';
+
+    return {
+      draw_number: nextDrawNumber,
+      nameZh,
+      nameEn,
+      date: nextIso,
+      time: '21:30 HKT',
+      estimatedFirstPrize,
+      detailsZh: `第 ${nextDrawNumber} 期 ${nameZh} • ${dayLabelZh} 晚上 9:30（估計頭獎基金 ${estimatedFirstPrize}）`,
+      detailsEn: `Draw ${nextDrawNumber} ${nameEn} • ${dayLabelEn}, 21:30 HKT (Est. 1st Prize: ${estimatedFirstPrize})`,
+      noteZh: latestDraw
+        ? `上期已開出第 ${latestDraw.draw_number} 期 (${latestDraw.date})。下期截止售票時間：攪珠日晚上 9:15 HKT。`
+        : `截止售票時間：攪珠日晚上 9:15 HKT。`,
+      noteEn: latestDraw
+        ? `Latest completed draw: ${latestDraw.draw_number} (${latestDraw.date}). Ticket sales close at 21:15 HKT on draw day.`
+        : `Ticket sales close at 21:15 HKT on draw day.`
+    };
+  };
+
+  const activeNextDraw = getDynamicNextDraw(history[0], nextDrawInfo);
 
   // Checker State
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
@@ -279,6 +341,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data.main && Array.isArray(data.main)) {
+          if (data.nextDraw) {
+            setNextDrawInfo(data.nextDraw);
+          }
           setStats({
             main: data.main,
             extra: data.extra,
@@ -507,59 +572,79 @@ export default function App() {
     setIsChecking(true);
     
     try {
-      let currentDraws = allDraws;
-      if (currentDraws.length === 0) {
-        const drawsCol = collection(db, 'draws');
-        const q = query(drawsCol, orderBy('date', 'desc'));
-        const snapshot = await getDocs(q);
-        const fetchedDraws: Draw[] = [];
-        snapshot.forEach(docSnap => {
-          fetchedDraws.push(docSnap.data() as Draw);
+      // Primary: Fast backend check across all 4,400 cached draws (1993-present)
+      let results: CheckResult[] | null = null;
+      try {
+        const res = await fetch('/api/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ numbers: numbersToCheck })
         });
-        currentDraws = fetchedDraws;
-        setAllDraws(currentDraws);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.wins)) {
+            results = data.wins;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Backend /api/check unavailable, falling back to direct Firestore query:", apiErr);
       }
 
-      const results = currentDraws.map((draw: Draw) => {
-        const drawNumbers = [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6];
-        const matchCount = numbersToCheck.filter(n => drawNumbers.includes(n)).length;
-        const extraMatch = numbersToCheck.includes(draw.extra_number);
+      if (!results) {
+        let currentDraws = allDraws;
+        if (currentDraws.length === 0) {
+          const drawsCol = collection(db, 'draws');
+          const q = query(drawsCol, orderBy('date', 'desc'));
+          const snapshot = await getDocs(q);
+          const fetchedDraws: Draw[] = [];
+          snapshot.forEach(docSnap => {
+            fetchedDraws.push(docSnap.data() as Draw);
+          });
+          currentDraws = fetchedDraws;
+          setAllDraws(currentDraws);
+        }
 
-        let prize = "No Prize";
-        if (matchCount === 6) prize = "1st Prize";
-        else if (matchCount === 5 && extraMatch) prize = "2nd Prize";
-        else if (matchCount === 5) prize = "3rd Prize";
-        else if (matchCount === 4 && extraMatch) prize = "4th Prize";
-        else if (matchCount === 4) prize = "5th Prize";
-        else if (matchCount === 3 && extraMatch) prize = "6th Prize";
-        else if (matchCount === 3) prize = "7th Prize";
+        results = currentDraws.map((draw: Draw) => {
+          const drawNumbers = [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6];
+          const matchCount = numbersToCheck.filter(n => drawNumbers.includes(n)).length;
+          const extraMatch = numbersToCheck.includes(draw.extra_number);
 
-        return {
-          date: draw.date,
-          draw_number: draw.draw_number,
-          drawNumbers,
-          extra: draw.extra_number,
-          matchCount,
-          extraMatch,
-          prize
+          let prize = "No Prize";
+          if (matchCount === 6) prize = "1st Prize";
+          else if (matchCount === 5 && extraMatch) prize = "2nd Prize";
+          else if (matchCount === 5) prize = "3rd Prize";
+          else if (matchCount === 4 && extraMatch) prize = "4th Prize";
+          else if (matchCount === 4) prize = "5th Prize";
+          else if (matchCount === 3 && extraMatch) prize = "6th Prize";
+          else if (matchCount === 3) prize = "7th Prize";
+
+          return {
+            date: draw.date,
+            draw_number: draw.draw_number,
+            drawNumbers,
+            extra: draw.extra_number,
+            matchCount,
+            extraMatch,
+            prize
+          };
+        }).filter(r => r.prize !== "No Prize");
+
+        const prizeOrder: Record<string, number> = {
+          "1st Prize": 1,
+          "2nd Prize": 2,
+          "3rd Prize": 3,
+          "4th Prize": 4,
+          "5th Prize": 5,
+          "6th Prize": 6,
+          "7th Prize": 7
         };
-      }).filter(r => r.prize !== "No Prize");
-
-      const prizeOrder: Record<string, number> = {
-        "1st Prize": 1,
-        "2nd Prize": 2,
-        "3rd Prize": 3,
-        "4th Prize": 4,
-        "5th Prize": 5,
-        "6th Prize": 6,
-        "7th Prize": 7
-      };
-      
-      results.sort((a, b) => {
-        const rankDiff = prizeOrder[a.prize] - prizeOrder[b.prize];
-        if (rankDiff !== 0) return rankDiff;
-        return b.date.localeCompare(a.date);
-      });
+        
+        results.sort((a, b) => {
+          const rankDiff = prizeOrder[a.prize] - prizeOrder[b.prize];
+          if (rankDiff !== 0) return rankDiff;
+          return b.date.localeCompare(a.date);
+        });
+      }
 
       setCheckResults(results);
       setTimeout(() => {
@@ -575,9 +660,10 @@ export default function App() {
     }
   };
 
-  const getForecast = () => {
+  const getForecast = (): Stat[] => {
     if (!stats || stats.main.length < 6) return [];
-    return stats.main.slice(0, 6).map(s => s.num).sort((a,b) => a - b);
+    // Ranked directly by appearance frequency (highest to lowest)
+    return stats.main.slice(0, 6);
   };
 
   const totalWinnings = checkResults ? checkResults.reduce((sum, res) => sum + (prizeValues[res.prize] || 0), 0) : 0;
@@ -755,35 +841,65 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="flex flex-col h-full"
               >
-                <div className="px-4 py-4 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between">
+                <div className="px-3 sm:px-4 py-2 sm:py-3 border-b border-[#e2e8f0] bg-[#f1f5f9] font-semibold text-xs sm:text-sm uppercase tracking-[0.05em] text-[#64748b] flex justify-between items-center">
                   <span>{txt.statsTitle.replace('{year}', stats.oldestYear || '')}</span>
-                  <span className="text-[10px]">{txt.totalDraws}: {stats.totalDraws}</span>
+                  <span className="text-[10px] sm:text-[11px] font-medium">{txt.totalDraws}: {stats.totalDraws}</span>
                 </div>
-                <div className="p-5 md:p-6 overflow-y-auto space-y-8">
-                  <div className="p-5 bg-[#f8fafc] border border-[#e2e8f0] rounded mb-8 flex flex-col md:flex-row items-center gap-6 justify-between">
-                    <div>
-                      <h3 className="text-[#1e293b] font-semibold mb-1 flex items-center gap-2 text-[14px]">
-                        <TrendingUp className="w-4 h-4 text-[#b45309]" /> {txt.forecastTitle}
-                      </h3>
-                      <p className="text-[#64748b] text-[12px]">
+                <div className="p-2.5 sm:p-4 md:p-6 overflow-y-auto space-y-2.5 sm:space-y-4 md:space-y-6">
+                  {/* Selected Element: Highly Forecasted Draw card */}
+                  <div className="p-2.5 sm:p-4 md:p-5 bg-gradient-to-br from-slate-50 via-amber-50/25 to-slate-50 border border-amber-200/80 rounded-xl flex flex-col xl:flex-row items-start xl:items-center gap-2 sm:gap-3 md:gap-4 justify-between shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+                    <div className="w-full xl:w-auto">
+                      <div className="flex items-center justify-between sm:justify-start gap-1.5 sm:gap-2 mb-0.5 sm:mb-1 flex-wrap">
+                        <h3 className="text-[#1e293b] font-bold flex items-center gap-1.5 text-xs sm:text-[14px] md:text-[15px]">
+                          <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#b45309]" /> {txt.forecastTitle}
+                        </h3>
+                        <span className="text-[10px] sm:text-[11px] font-semibold text-amber-800 bg-amber-100/90 border border-amber-300/60 px-1.5 py-0.5 rounded-full">
+                          {lang === 'zh-HK' ? '按次數排行 (#1 - #6)' : 'Ranked #1 - #6'}
+                        </span>
+                      </div>
+                      <p className="text-[#64748b] text-[11px] sm:text-[12px] max-w-lg leading-snug hidden sm:block">
                         {txt.forecastDesc}
                       </p>
                     </div>
-                    <div className="flex gap-2">
-                      {getForecast().map((num, i) => (
-                        <Ball key={i} num={num} size="w-8 h-8" />
-                      ))}
+                    <div className="grid grid-cols-6 gap-1 sm:gap-2 w-full xl:w-auto">
+                      {getForecast().map((item, i) => {
+                        const rankColors = [
+                          'bg-amber-500 text-white shadow-sm ring-1 ring-amber-400',
+                          'bg-slate-400 text-white shadow-sm ring-1 ring-slate-300',
+                          'bg-amber-700 text-white shadow-sm ring-1 ring-amber-600',
+                          'bg-slate-200 text-slate-700',
+                          'bg-slate-200 text-slate-700',
+                          'bg-slate-200 text-slate-700',
+                        ];
+                        return (
+                          <div
+                            key={item.num}
+                            className="flex flex-col items-center justify-center bg-white/95 border border-slate-200 rounded-lg py-1 px-0.5 sm:p-2 shadow-sm hover:shadow transition-shadow"
+                          >
+                            <span className={`text-[9px] sm:text-[10px] font-black px-1 sm:px-1.5 py-0 sm:py-0.5 rounded-full mb-0.5 sm:mb-1 uppercase leading-none ${rankColors[i] || 'bg-slate-200 text-slate-700'}`}>
+                              #{i + 1}
+                            </span>
+                            <Ball num={item.num} size="w-7 h-7 sm:w-8 sm:h-8 md:w-9 md:h-9" />
+                            <span className="text-[10px] sm:text-[11px] font-bold text-slate-700 mt-0.5 sm:mt-1 tracking-tight flex items-center leading-none">
+                              {item.frequency}
+                              <span className="text-[8px] sm:text-[10px] font-normal text-slate-400 ml-0.5">
+                                {txt.appearanceCount}
+                              </span>
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  <div className="h-[300px] w-full">
+                  <div className="h-[200px] xs:h-[220px] sm:h-[260px] md:h-[300px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={stats.main.slice(0, 15)} margin={{ top: 20, right: 0, left: -20, bottom: 0 }}>
-                        <XAxis dataKey="num" tickLine={false} axisLine={false} fontSize={12} tickMargin={10} stroke="#64748b" />
-                        <YAxis tickLine={false} axisLine={false} fontSize={12} stroke="#64748b" />
+                      <BarChart data={stats.main.slice(0, 15)} margin={{ top: 10, right: 0, left: -22, bottom: 0 }}>
+                        <XAxis dataKey="num" tickLine={false} axisLine={false} fontSize={11} tickMargin={6} stroke="#64748b" interval={0} />
+                        <YAxis tickLine={false} axisLine={false} fontSize={11} stroke="#64748b" />
                         <Tooltip 
                           cursor={{ fill: '#f1f5f9' }} 
-                          contentStyle={{ borderRadius: '4px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', fontSize: '13px' }}
+                          contentStyle={{ borderRadius: '6px', border: '1px solid #e2e8f0', boxShadow: '0 2px 6px rgba(0,0,0,0.06)', fontSize: '12px' }}
                         />
                         <Bar dataKey="frequency" radius={[4, 4, 0, 0]}>
                           {stats.main.slice(0, 15).map((entry, index) => (
@@ -814,14 +930,14 @@ export default function App() {
                           {txt.nextDrawNotice}
                         </span>
                         <span className="text-xs font-semibold text-amber-950">
-                          {lang === 'zh-HK' ? nextDrawInfo?.nameZh : nextDrawInfo?.nameEn} ({nextDrawInfo?.draw_number})
+                          {lang === 'zh-HK' ? activeNextDraw.nameZh : activeNextDraw.nameEn} ({activeNextDraw.draw_number})
                         </span>
                       </div>
                       <p className="text-xs text-amber-950 mt-1 font-medium">
-                        {txt.nextDrawDetails}
+                        {lang === 'zh-HK' ? activeNextDraw.detailsZh : activeNextDraw.detailsEn}
                       </p>
                       <p className="text-[11px] text-amber-800/90 mt-0.5">
-                        {txt.scheduleNote}
+                        {lang === 'zh-HK' ? activeNextDraw.noteZh : activeNextDraw.noteEn}
                       </p>
                     </div>
                     {lastSyncTime && (
