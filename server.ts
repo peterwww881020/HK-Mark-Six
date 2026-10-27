@@ -37,6 +37,55 @@ let isFetchingDraws = false;
 let isSyncing = false;
 let lastSyncTimestamp = 0;
 
+function initCacheFromCsv() {
+  try {
+    const csvPath = path.join(process.cwd(), 'public/assets/aistudio/mark6_history_ace94645.csv');
+    if (!fs.existsSync(csvPath)) return;
+    const content = fs.readFileSync(csvPath, 'utf8');
+    const lines = content.trim().split(/\r?\n/);
+    const initialDraws: Draw[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const cols = line.split(',');
+      if (cols.length < 9) continue;
+      const rawId = cols[0].trim();
+      const rawDate = cols[1].trim();
+      const n1 = parseInt(cols[2], 10);
+      const n2 = parseInt(cols[3], 10);
+      const n3 = parseInt(cols[4], 10);
+      const n4 = parseInt(cols[5], 10);
+      const n5 = parseInt(cols[6], 10);
+      const n6 = parseInt(cols[7], 10);
+      const extra_number = parseInt(cols[8], 10);
+      if (isNaN(n1) || isNaN(extra_number)) continue;
+
+      let draw_number = rawId;
+      if (rawId.includes('/')) {
+        const parts = rawId.split('/');
+        const yr = parts[0].padStart(2, '0');
+        const num = parts[1].padStart(3, '0');
+        draw_number = `${yr}/${num}`;
+      }
+
+      initialDraws.push({
+        date: rawDate,
+        draw_number,
+        n1, n2, n3, n4, n5, n6,
+        extra_number
+      });
+    }
+    initialDraws.sort((a, b) => b.date.localeCompare(a.date));
+    if (initialDraws.length > 0) {
+      cachedDraws = initialDraws;
+      console.log(`Preloaded ${cachedDraws.length} historical draws from local CSV on startup.`);
+    }
+  } catch (err: any) {
+    console.warn("Could not pre-populate cache from CSV:", err.message);
+  }
+}
+initCacheFromCsv();
+
 async function refreshCache() {
   if (isFetchingDraws) return;
   isFetchingDraws = true;
@@ -48,8 +97,10 @@ async function refreshCache() {
     snapshot.forEach(docSnap => {
       newDraws.push(docSnap.data() as Draw);
     });
-    cachedDraws = newDraws;
-    console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+    if (newDraws.length > 0) {
+      cachedDraws = newDraws;
+      console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+    }
   } catch (err: any) {
     console.error("Error fetching draws from firestore", err.message);
   } finally {
@@ -465,6 +516,51 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
+  // Unified bootstrap endpoint (History + Stats + Next Draw in 1 fast roundtrip)
+  app.get("/api/bootstrap", (req, res) => {
+    const limitCount = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const freqMap: Record<number, number> = {};
+    const extraFreqMap: Record<number, number> = {};
+    
+    cachedDraws.forEach(draw => {
+      [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
+        freqMap[n] = (freqMap[n] || 0) + 1;
+      });
+      extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
+    });
+
+    const stats = Object.entries(freqMap)
+      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+      .sort((a, b) => b.frequency - a.frequency);
+
+    const extraStats = Object.entries(extraFreqMap)
+      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+      .sort((a, b) => b.frequency - a.frequency);
+
+    const oldestDrawDate = cachedDraws[cachedDraws.length - 1]?.date;
+    const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '1993';
+
+    res.json({
+      history: cachedDraws.slice(0, isNaN(limitCount) ? 50 : limitCount),
+      stats: {
+        main: stats,
+        extra: extraStats,
+        totalDraws: cachedDraws.length,
+        oldestYear,
+      },
+      latestDraw: cachedDraws[0] || null,
+      nextDraw: getNextDrawSchedule(cachedDraws[0]),
+      lastSyncTimestamp
+    });
+  });
+
   // API Routes
   app.get("/api/history", (req, res) => {
     const limitCount = req.query.limit ? parseInt(req.query.limit as string) : 50;
@@ -572,9 +668,12 @@ async function startServer() {
   app.post("/api/auto-sync", async (req, res) => {
     try {
       const force = req.query.force === 'true' || req.body?.force === true;
-      if (force || Date.now() - lastSyncTimestamp > 8 * 60 * 1000) {
+      if (force) {
         const result = await syncRecentDraws();
         return res.json(result);
+      }
+      if (Date.now() - lastSyncTimestamp > 8 * 60 * 1000) {
+        syncRecentDraws().catch(console.error);
       }
       res.json({
         success: true,
@@ -615,7 +714,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
     // Auto-populate / refresh cache and promptly sync on startup
@@ -644,6 +743,10 @@ async function startServer() {
       }
     }, 60 * 1000);
   });
+
+  // Prevent Safari / iOS WebKit "Load failed" socket reuse race condition
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
 }
 
 startServer();

@@ -201,8 +201,24 @@ export default function App() {
   const [lang, setLang] = useState<'en' | 'zh-HK'>('zh-HK');
   const txt = t[lang];
   const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history' | 'secret'>('check');
-  const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(null);
-  const [history, setHistory] = useState<Draw[]>([]);
+  
+  // Instant cache hydration from localStorage for mobile and desktop
+  const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(() => {
+    try {
+      const cached = localStorage.getItem('cached_mark6_stats_v2');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [history, setHistory] = useState<Draw[]>(() => {
+    try {
+      const cached = localStorage.getItem('cached_mark6_history_v2');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [allDraws, setAllDraws] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
@@ -297,105 +313,158 @@ export default function App() {
   });
   const [secretPhase, setSecretPhase] = useState<number>(0);
 
-  const fetchHistory = async () => {
+  // Resilient fetch helper with timeout to prevent Safari/mobile socket hanging
+  const fetchWithTimeout = async (url: string, options?: RequestInit, timeoutMs = 7000): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      // Primary: Fast in-memory backend cache
-      const res = await fetch('/api/history?limit=50');
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  };
+
+  const fetchHistory = async () => {
+    // 1. Primary: Fast in-memory backend cache
+    try {
+      const res = await fetchWithTimeout('/api/history?limit=50', undefined, 6000);
       if (res.ok) {
         const data: Draw[] = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           setHistory(data);
+          try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(data)); } catch {}
           return data;
         }
       }
-      // Direct Firestore fallback
+    } catch (e) {
+      // Backend temporarily unavailable (e.g. cold start), fall through to Firestore
+    }
+
+    // 2. Direct Firestore fallback (bounded to 50 items for instant load)
+    try {
       const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
       const snapshot = await getDocs(q);
       const data: Draw[] = [];
       snapshot.forEach(docSnap => {
         data.push(docSnap.data() as Draw);
       });
-      setHistory(data);
-      return data;
-    } catch (e) {
-      console.error("fetchHistory fallback:", e);
-      try {
-        const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
-        const snapshot = await getDocs(q);
-        const data: Draw[] = [];
-        snapshot.forEach(docSnap => {
-          data.push(docSnap.data() as Draw);
-        });
+      if (data.length > 0) {
         setHistory(data);
-        return data;
-      } catch (err) {
-        console.error("Direct Firestore read error:", err);
+        try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(data)); } catch {}
       }
+      return data;
+    } catch (err) {
+      console.warn("Direct Firestore history notice:", err);
     }
   };
 
   const fetchStats = async () => {
+    // 1. Primary: Fast backend stats API
     try {
-      // Primary: Fast backend stats API
-      const res = await fetch('/api/stats');
+      const res = await fetchWithTimeout('/api/stats', undefined, 6000);
       if (res.ok) {
         const data = await res.json();
-        if (data.main && Array.isArray(data.main)) {
+        if (data.main && Array.isArray(data.main) && data.main.length > 0) {
           if (data.nextDraw) {
             setNextDrawInfo(data.nextDraw);
           }
-          setStats({
+          const newStats = {
             main: data.main,
             extra: data.extra,
             totalDraws: data.totalDraws,
-            oldestYear: data.oldestYear || ''
-          });
+            oldestYear: data.oldestYear || '1993'
+          };
+          setStats(newStats);
+          try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(newStats)); } catch {}
           return;
         }
       }
+    } catch (e) {
+      // Backend temporarily unavailable
+    }
 
-      // Firestore calculation fallback
+    // 2. If stats already cached in state / localStorage, keep using them
+    if (stats && stats.main && stats.main.length > 0) {
+      return;
+    }
+
+    // 3. Firestore calculation fallback for stats (recent sample if backend is offline)
+    try {
       const drawsCol = collection(db, 'draws');
-      const q = query(drawsCol, orderBy('date', 'desc'));
+      const q = query(drawsCol, orderBy('date', 'desc'), limit(250));
       const snapshot = await getDocs(q);
       
-      const allDrawsData: Draw[] = [];
+      const drawsData: Draw[] = [];
       snapshot.forEach(docSnap => {
-        allDrawsData.push(docSnap.data() as Draw);
+        drawsData.push(docSnap.data() as Draw);
       });
 
-      const freqMap: Record<number, number> = {};
-      const extraFreqMap: Record<number, number> = {};
-      
-      allDrawsData.forEach(draw => {
-        [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
-          freqMap[n] = (freqMap[n] || 0) + 1;
+      if (drawsData.length > 0) {
+        const freqMap: Record<number, number> = {};
+        const extraFreqMap: Record<number, number> = {};
+        
+        drawsData.forEach(draw => {
+          [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
+            freqMap[n] = (freqMap[n] || 0) + 1;
+          });
+          extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
         });
-        extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
-      });
 
-      const stats = Object.entries(freqMap)
-        .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-        .sort((a, b) => b.frequency - a.frequency);
+        const mainStats = Object.entries(freqMap)
+          .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+          .sort((a, b) => b.frequency - a.frequency);
 
-      const extraStats = Object.entries(extraFreqMap)
-        .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-        .sort((a, b) => b.frequency - a.frequency);
+        const extraStats = Object.entries(extraFreqMap)
+          .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+          .sort((a, b) => b.frequency - a.frequency);
 
-      const oldestDrawDate = allDrawsData[allDrawsData.length - 1]?.date;
-      const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '';
+        const oldestDrawDate = drawsData[drawsData.length - 1]?.date;
+        const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '1993';
 
-      setAllDraws(allDrawsData);
-      setStats({ main: stats, extra: extraStats, totalDraws: allDrawsData.length, oldestYear });
-    } catch (e) {
-      console.error("fetchStats fallback:", e);
+        const computed = { main: mainStats, extra: extraStats, totalDraws: drawsData.length, oldestYear };
+        setStats(computed);
+        try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(computed)); } catch {}
+      }
+    } catch (err) {
+      console.warn("Direct Firestore stats notice:", err);
     }
+  };
+
+  // Unified bootstrap loader (Single round-trip for history, stats, and next draw)
+  const bootstrapApp = async () => {
+    try {
+      const res = await fetchWithTimeout('/api/bootstrap', undefined, 6000);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.history && Array.isArray(data.history) && data.history.length > 0) {
+          setHistory(data.history);
+          try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(data.history)); } catch {}
+        }
+        if (data.stats && data.stats.main && Array.isArray(data.stats.main)) {
+          setStats(data.stats);
+          try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(data.stats)); } catch {}
+        }
+        if (data.nextDraw) {
+          setNextDrawInfo(data.nextDraw);
+        }
+        if (data.lastSyncTimestamp) {
+          setLastSyncTime(new Date(data.lastSyncTimestamp).toLocaleTimeString());
+        }
+        return true;
+      }
+    } catch (e) {
+      // If bootstrap fails, fall back to individual calls
+    }
+    await Promise.all([fetchHistory(), fetchStats()]);
   };
 
   const checkRecent = async (force = false) => {
     try {
       const url = force ? '/api/update' : '/api/auto-sync';
-      const res = await fetch(url, { method: 'POST' });
+      const res = await fetchWithTimeout(url, { method: 'POST' }, 8000);
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
@@ -404,8 +473,7 @@ export default function App() {
         }
         setLastSyncTime(new Date().toLocaleTimeString());
         if (data.updatedCount > 0) {
-          await fetchHistory();
-          await fetchStats();
+          await bootstrapApp();
         }
       }
     } catch (e) {
@@ -414,28 +482,23 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchHistory();
-    fetchStats();
+    // 1. Initial fast bootstrap
+    bootstrapApp();
 
-    // Check status and sync state immediately on load
-    fetch('/api/status')
-      .then(res => res.json())
-      .then(status => {
-        if (status.nextDraw) setNextDrawInfo(status.nextDraw);
-        if (status.lastSyncTimestamp) {
-          setLastSyncTime(new Date(status.lastSyncTimestamp).toLocaleTimeString());
-        }
-      })
-      .catch(() => {});
+    // 2. Delayed background sync check (2s after initial render to avoid socket race conditions on iOS Safari)
+    const initialSyncTimer = setTimeout(() => {
+      checkRecent(false);
+    }, 2000);
 
-    checkRecent(false);
-
-    // Periodically verify and auto-sync prompt draws every 3 minutes while page is kept open
+    // 3. Periodically verify and auto-sync prompt draws every 3 minutes while page is kept open
     const interval = setInterval(() => {
       checkRecent(false);
     }, 3 * 60 * 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialSyncTimer);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleUpdate = async () => {
