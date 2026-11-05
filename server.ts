@@ -86,26 +86,32 @@ function initCacheFromCsv() {
 }
 initCacheFromCsv();
 
-async function refreshCache() {
-  if (isFetchingDraws) return;
+let activeRefreshPromise: Promise<void> | null = null;
+
+async function refreshCache(): Promise<void> {
+  if (activeRefreshPromise) return activeRefreshPromise;
   isFetchingDraws = true;
-  try {
-    const drawsCol = collection(db, 'draws');
-    const q = query(drawsCol, orderBy('date', 'desc'));
-    const snapshot = await getDocs(q);
-    const newDraws: Draw[] = [];
-    snapshot.forEach(docSnap => {
-      newDraws.push(docSnap.data() as Draw);
-    });
-    if (newDraws.length > 0) {
-      cachedDraws = newDraws;
-      console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+  activeRefreshPromise = (async () => {
+    try {
+      const drawsCol = collection(db, 'draws');
+      const q = query(drawsCol, orderBy('date', 'desc'));
+      const snapshot = await getDocs(q);
+      const newDraws: Draw[] = [];
+      snapshot.forEach(docSnap => {
+        newDraws.push(docSnap.data() as Draw);
+      });
+      if (newDraws.length > 0) {
+        cachedDraws = newDraws;
+        console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+      }
+    } catch (err: any) {
+      console.error("Error fetching draws from firestore", err.message);
+    } finally {
+      isFetchingDraws = false;
+      activeRefreshPromise = null;
     }
-  } catch (err: any) {
-    console.error("Error fetching draws from firestore", err.message);
-  } finally {
-    isFetchingDraws = false;
-  }
+  })();
+  return activeRefreshPromise;
 }
 
 // Scraper 1: Lottery.hk English (Fast, up to ~130 recent draws)
@@ -524,7 +530,13 @@ async function startServer() {
   });
 
   // Unified bootstrap endpoint (History + Stats + Next Draw in 1 fast roundtrip)
-  app.get("/api/bootstrap", (req, res) => {
+  app.get("/api/bootstrap", async (req, res) => {
+    if (activeRefreshPromise) {
+      try { await activeRefreshPromise; } catch {}
+    }
+    if (Date.now() - lastSyncTimestamp > 3 * 60 * 1000) {
+      syncRecentDraws().catch(console.error);
+    }
     const limitCount = req.query.limit ? parseInt(req.query.limit as string) : 50;
     const freqMap: Record<number, number> = {};
     const extraFreqMap: Record<number, number> = {};
@@ -664,16 +676,13 @@ async function startServer() {
     }
   });
 
-  // Background auto-sync endpoint (checks if 8 mins have passed, or if force=true)
+  // Background auto-sync endpoint (awaits active or due sync so client gets fresh draws immediately)
   app.post("/api/auto-sync", async (req, res) => {
     try {
       const force = req.query.force === 'true' || req.body?.force === true;
-      if (force) {
+      if (force || activeSyncPromise !== null || Date.now() - lastSyncTimestamp > 3 * 60 * 1000) {
         const result = await syncRecentDraws();
         return res.json(result);
-      }
-      if (Date.now() - lastSyncTimestamp > 8 * 60 * 1000) {
-        syncRecentDraws().catch(console.error);
       }
       res.json({
         success: true,

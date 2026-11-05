@@ -3,7 +3,7 @@ import { RefreshCw, Search, BarChart3, History, TrendingUp, Trophy, Languages } 
 import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { db, collection, getDocs, query, orderBy, limit, doc, setDoc } from './lib/firebase';
+import { db, collection, getDocs, query, orderBy, limit, doc, setDoc, onSnapshot } from './lib/firebase';
 
 
 const prizeValues: Record<string, number> = {
@@ -75,7 +75,9 @@ const t = {
     colExtra: "Extra",
     nextDrawNotice: "Next Draw",
     latestDrawLabel: "Latest Recorded Draw",
-    lastChecked: "Last synced",
+    lastChecked: "Auto-synced",
+    autoSyncActive: "Auto-Sync On",
+    autoChecking: "Auto-checking...",
     prize: {
       "1st Prize": "1st Prize",
       "2nd Prize": "2nd Prize",
@@ -118,7 +120,9 @@ const t = {
     colExtra: "特別號碼",
     nextDrawNotice: "下期攪珠預告",
     latestDrawLabel: "最新已開期數",
-    lastChecked: "最後更新",
+    lastChecked: "自動更新於",
+    autoSyncActive: "自動同步開啟",
+    autoChecking: "自動檢查中...",
     prize: {
       "1st Prize": "頭獎",
       "2nd Prize": "二獎",
@@ -221,9 +225,15 @@ export default function App() {
   });
   const [allDraws, setAllDraws] = useState<Draw[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isAutoSyncing, setIsAutoSyncing] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [nextDrawInfo, setNextDrawInfo] = useState<any>(null);
+
+  const historyRef = useRef<Draw[]>(history);
+  const statsRef = useRef<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(stats);
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { statsRef.current = stats; }, [stats]);
 
   const getDynamicNextDraw = (latestDraw?: Draw, serverNext?: any) => {
     if (serverNext && serverNext.detailsZh && (!latestDraw?.date || serverNext.date > latestDraw.date)) {
@@ -463,43 +473,96 @@ export default function App() {
 
   const checkRecent = async (force = false) => {
     try {
+      setIsAutoSyncing(true);
       const url = force ? '/api/update' : '/api/auto-sync';
-      const res = await fetchWithTimeout(url, { method: 'POST' }, 8000);
+      const res = await fetchWithTimeout(url, { method: 'POST' }, 10000);
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         if (data.nextDraw) {
           setNextDrawInfo(data.nextDraw);
         }
-        setLastSyncTime(new Date().toLocaleTimeString());
-        if (data.updatedCount > 0) {
+        setLastSyncTime(new Date(data.timestamp || Date.now()).toLocaleTimeString());
+
+        const serverLatestId = data.latestDraw?.draw_number;
+        const clientLatestId = historyRef.current[0]?.draw_number;
+        const serverTotal = data.totalDraws;
+        const clientTotal = statsRef.current?.totalDraws;
+
+        if (
+          data.updatedCount > 0 ||
+          (serverLatestId && serverLatestId !== clientLatestId) ||
+          (typeof serverTotal === 'number' && serverTotal > 0 && serverTotal !== clientTotal)
+        ) {
           await bootstrapApp();
         }
       }
     } catch (e) {
       // Silently ignore background check errors
+    } finally {
+      setIsAutoSyncing(false);
     }
   };
 
   useEffect(() => {
-    // 1. Initial fast bootstrap
-    bootstrapApp();
-
-    // 2. Delayed background sync check (2s after initial render to avoid socket race conditions on iOS Safari)
-    const initialSyncTimer = setTimeout(() => {
+    // 1. Initial fast bootstrap + immediate background sync verification
+    bootstrapApp().then(() => {
       checkRecent(false);
-    }, 2000);
+    });
 
-    // 3. Periodically verify and auto-sync prompt draws every 3 minutes while page is kept open
+    // 2. Real-time Firestore listener on recent draws:
+    // Whenever backend scraper writes a new draw to Firestore, update UI immediately without manual sync
+    const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(50));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const liveDraws: Draw[] = [];
+        snapshot.forEach(docSnap => {
+          liveDraws.push(docSnap.data() as Draw);
+        });
+        if (liveDraws.length > 0) {
+          const prevTopId = historyRef.current[0]?.draw_number;
+          setHistory(liveDraws);
+          try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(liveDraws)); } catch {}
+          setLastSyncTime(new Date().toLocaleTimeString());
+          if (prevTopId && liveDraws[0].draw_number !== prevTopId) {
+            fetchStats();
+          }
+        }
+      },
+      (err) => {
+        console.warn("Realtime draws listener notice:", err);
+      }
+    );
+
+    // 3. Auto-sync when user returns to browser tab or unlocks mobile screen
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        checkRecent(false);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    // 4. Periodically verify and auto-sync draws every 2 minutes (or every 45s during draw nights)
     const interval = setInterval(() => {
       checkRecent(false);
-    }, 3 * 60 * 1000);
+    }, 2 * 60 * 1000);
 
     return () => {
-      clearTimeout(initialSyncTimer);
+      unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
       clearInterval(interval);
     };
   }, []);
+
+  // Automatically verify latest data when switching to Recent Draws or Statistics tabs
+  useEffect(() => {
+    if (activeTab === 'history' || activeTab === 'stats') {
+      checkRecent(false);
+    }
+  }, [activeTab]);
 
   const handleUpdate = async () => {
     setIsUpdating(true);
@@ -742,6 +805,12 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2 md:gap-3">
+          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/15 border border-emerald-400/30 rounded-full text-[11px] text-emerald-200 font-medium">
+            <span className={`w-2 h-2 rounded-full bg-emerald-400 ${isAutoSyncing ? 'animate-ping' : 'animate-pulse'}`}></span>
+            <span>{isAutoSyncing ? txt.autoChecking : txt.autoSyncActive}</span>
+            {lastSyncTime && <span className="opacity-75">({lastSyncTime})</span>}
+          </div>
+
           <button 
             onClick={() => setLang(l => l === 'en' ? 'zh-HK' : 'en')}
             className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap"
@@ -753,9 +822,10 @@ export default function App() {
           <button 
             onClick={handleUpdate}
             disabled={isUpdating}
+            title={lang === 'zh-HK' ? '系統已啟用自動同步，亦可按此立即強制檢查' : 'Auto-sync is active; click to force check now'}
             className="flex items-center justify-center gap-1.5 px-2 md:px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-transparent rounded text-[11px] md:text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap"
           >
-            <RefreshCw className={`w-4 h-4 md:w-3 md:h-3 ${isUpdating ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 md:w-3 md:h-3 ${isUpdating || isAutoSyncing ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{isUpdating ? txt.updating : txt.sync}</span>
           </button>
         </div>
