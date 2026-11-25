@@ -16,12 +16,27 @@
         "extra_number": { "type": "number" }
       },
       "required": ["date", "draw_number", "n1", "n2", "n3", "n4", "n5", "n6", "extra_number"]
+    },
+    "StatsSummary": {
+      "title": "StatsSummary",
+      "description": "Pre-computed frequency statistics across all historical draws since 1993.",
+      "type": "object",
+      "properties": {
+        "totalDraws": { "type": "number" },
+        "oldestYear": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["totalDraws", "oldestYear", "updatedAt"]
     }
   },
   "firestore": {
     "/draws/{drawId}": {
       "schema": { "$ref": "#/entities/Draw" },
       "description": "Historical mark six draws"
+    },
+    "/meta/stats": {
+      "schema": { "$ref": "#/entities/StatsSummary" },
+      "description": "Pre-computed full-history frequency statistics summary since 1993"
     }
   }
 }

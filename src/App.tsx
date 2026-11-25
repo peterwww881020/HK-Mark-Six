@@ -3,7 +3,7 @@ import { RefreshCw, Search, BarChart3, History, TrendingUp, Trophy, Languages } 
 import { motion, AnimatePresence } from 'motion/react';
 import { Draw, Stat, CheckResult } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { db, collection, getDocs, query, orderBy, limit, doc, setDoc, onSnapshot } from './lib/firebase';
+import { db, collection, getDoc, getDocs, query, orderBy, limit, doc, setDoc, onSnapshot } from './lib/firebase';
 
 
 const prizeValues: Record<string, number> = {
@@ -206,11 +206,18 @@ export default function App() {
   const txt = t[lang];
   const [activeTab, setActiveTab] = useState<'check' | 'stats' | 'history' | 'secret'>('check');
   
-  // Instant cache hydration from localStorage for mobile and desktop
+  // Instant cache hydration from localStorage (v3: strictly requires full 1993+ history)
   const [stats, setStats] = useState<{ main: Stat[], extra: Stat[], totalDraws: number, oldestYear?: string } | null>(() => {
     try {
-      const cached = localStorage.getItem('cached_mark6_stats_v2');
-      return cached ? JSON.parse(cached) : null;
+      // Clear any legacy v2 cache that may have stored truncated 250-draw (2024+) fallback data
+      localStorage.removeItem('cached_mark6_stats_v2');
+      const cached = localStorage.getItem('cached_mark6_stats_v3');
+      if (!cached) return null;
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.main && parsed.totalDraws >= 1000) {
+        return parsed;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -371,13 +378,74 @@ export default function App() {
     }
   };
 
-  const fetchStats = async () => {
-    // 1. Primary: Fast backend stats API
+  // Load complete 1993–present draw history by merging static 1993–2026 CSV with latest Firestore draws
+  const loadFullHistoryFromCsvAndFirestore = async (): Promise<Draw[]> => {
+    const drawMap = new Map<string, Draw>();
+
+    // 1. Load full 1993–2026 historical baseline from static CSV (4,390 draws, fast same-origin fetch)
     try {
-      const res = await fetchWithTimeout('/api/stats', undefined, 6000);
+      const csvRes = await fetchWithTimeout('/assets/aistudio/mark6_history_ace94645.csv', undefined, 10000);
+      if (csvRes.ok) {
+        const text = await csvRes.text();
+        const lines = text.trim().split(/\r?\n/);
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          const cols = line.split(',');
+          if (cols.length < 9) continue;
+          const rawId = cols[0].trim();
+          const rawDate = cols[1].trim();
+          const n1 = parseInt(cols[2], 10);
+          const n2 = parseInt(cols[3], 10);
+          const n3 = parseInt(cols[4], 10);
+          const n4 = parseInt(cols[5], 10);
+          const n5 = parseInt(cols[6], 10);
+          const n6 = parseInt(cols[7], 10);
+          const extra_number = parseInt(cols[8], 10);
+          if (isNaN(n1) || isNaN(extra_number)) continue;
+
+          let draw_number = rawId;
+          if (rawId.includes('/')) {
+            const parts = rawId.split('/');
+            draw_number = `${parts[0].padStart(2, '0')}/${parts[1].padStart(3, '0')}`;
+          }
+          drawMap.set(draw_number, {
+            id: i,
+            date: rawDate,
+            draw_number,
+            n1, n2, n3, n4, n5, n6,
+            extra_number
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Static CSV fallback load notice:", err);
+    }
+
+    // 2. Overlay latest draws from Firestore so newly synced draws after the CSV cutoff are included
+    try {
+      const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(200));
+      const snapshot = await getDocs(q);
+      snapshot.forEach(docSnap => {
+        const d = docSnap.data() as Draw;
+        if (d && d.draw_number) {
+          drawMap.set(d.draw_number, d);
+        }
+      });
+    } catch (err) {
+      console.warn("Firestore recent overlay notice:", err);
+    }
+
+    return Array.from(drawMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+  };
+
+  const fetchStats = async () => {
+    // 1. Primary: Fast backend stats API (all 4,400+ draws since 1993)
+    try {
+      const res = await fetchWithTimeout('/api/stats', undefined, 10000);
       if (res.ok) {
         const data = await res.json();
-        if (data.main && Array.isArray(data.main) && data.main.length > 0) {
+        if (data.main && Array.isArray(data.main) && data.main.length > 0 && data.totalDraws >= 1000) {
           if (data.nextDraw) {
             setNextDrawInfo(data.nextDraw);
           }
@@ -388,34 +456,45 @@ export default function App() {
             oldestYear: data.oldestYear || '1993'
           };
           setStats(newStats);
-          try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(newStats)); } catch {}
+          try { localStorage.setItem('cached_mark6_stats_v3', JSON.stringify(newStats)); } catch {}
           return;
         }
       }
     } catch (e) {
-      // Backend temporarily unavailable
+      // Backend temporarily unavailable, fall through to Firestore summary doc
     }
 
-    // 2. If stats already cached in state / localStorage, keep using them
-    if (stats && stats.main && stats.main.length > 0) {
-      return;
-    }
-
-    // 3. Firestore calculation fallback for stats (recent sample if backend is offline)
+    // 2. Fast single-document Firestore stats summary (pre-computed across all draws since 1993)
     try {
-      const drawsCol = collection(db, 'draws');
-      const q = query(drawsCol, orderBy('date', 'desc'), limit(250));
-      const snapshot = await getDocs(q);
-      
-      const drawsData: Draw[] = [];
-      snapshot.forEach(docSnap => {
-        drawsData.push(docSnap.data() as Draw);
-      });
+      const summarySnap = await getDoc(doc(db, 'meta', 'stats'));
+      if (summarySnap.exists()) {
+        const data = summarySnap.data() as any;
+        if (data.main && Array.isArray(data.main) && data.totalDraws >= 1000) {
+          if (data.nextDraw) {
+            setNextDrawInfo(data.nextDraw);
+          }
+          const newStats = {
+            main: data.main,
+            extra: data.extra,
+            totalDraws: data.totalDraws,
+            oldestYear: data.oldestYear || '1993'
+          };
+          setStats(newStats);
+          try { localStorage.setItem('cached_mark6_stats_v3', JSON.stringify(newStats)); } catch {}
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Firestore meta/stats read notice:", err);
+    }
 
+    // 3. Full client-side calculation fallback: 1993–2026 CSV + latest Firestore draws (never truncated to 250)
+    try {
+      const drawsData = await loadFullHistoryFromCsvAndFirestore();
       if (drawsData.length > 0) {
         const freqMap: Record<number, number> = {};
         const extraFreqMap: Record<number, number> = {};
-        
+
         drawsData.forEach(draw => {
           [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
             freqMap[n] = (freqMap[n] || 0) + 1;
@@ -424,38 +503,41 @@ export default function App() {
         });
 
         const mainStats = Object.entries(freqMap)
-          .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+          .map(([num, freq]) => ({ num: parseInt(num, 10), frequency: freq }))
           .sort((a, b) => b.frequency - a.frequency);
 
         const extraStats = Object.entries(extraFreqMap)
-          .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
+          .map(([num, freq]) => ({ num: parseInt(num, 10), frequency: freq }))
           .sort((a, b) => b.frequency - a.frequency);
 
         const oldestDrawDate = drawsData[drawsData.length - 1]?.date;
         const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '1993';
 
         const computed = { main: mainStats, extra: extraStats, totalDraws: drawsData.length, oldestYear };
+        setAllDraws(drawsData);
         setStats(computed);
-        try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(computed)); } catch {}
+        if (drawsData.length >= 1000) {
+          try { localStorage.setItem('cached_mark6_stats_v3', JSON.stringify(computed)); } catch {}
+        }
       }
     } catch (err) {
-      console.warn("Direct Firestore stats notice:", err);
+      console.warn("Full client-side stats calculation notice:", err);
     }
   };
 
   // Unified bootstrap loader (Single round-trip for history, stats, and next draw)
   const bootstrapApp = async () => {
     try {
-      const res = await fetchWithTimeout('/api/bootstrap', undefined, 6000);
+      const res = await fetchWithTimeout('/api/bootstrap', undefined, 10000);
       if (res.ok) {
         const data = await res.json();
         if (data.history && Array.isArray(data.history) && data.history.length > 0) {
           setHistory(data.history);
           try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(data.history)); } catch {}
         }
-        if (data.stats && data.stats.main && Array.isArray(data.stats.main)) {
+        if (data.stats && data.stats.main && Array.isArray(data.stats.main) && data.stats.totalDraws >= 1000) {
           setStats(data.stats);
-          try { localStorage.setItem('cached_mark6_stats_v2', JSON.stringify(data.stats)); } catch {}
+          try { localStorage.setItem('cached_mark6_stats_v3', JSON.stringify(data.stats)); } catch {}
         }
         if (data.nextDraw) {
           setNextDrawInfo(data.nextDraw);
@@ -463,7 +545,9 @@ export default function App() {
         if (data.lastSyncTimestamp) {
           setLastSyncTime(new Date(data.lastSyncTimestamp).toLocaleTimeString());
         }
-        return true;
+        if (data.stats && data.stats.totalDraws >= 1000) {
+          return true;
+        }
       }
     } catch (e) {
       // If bootstrap fails, fall back to individual calls
@@ -525,7 +609,7 @@ export default function App() {
           setHistory(liveDraws);
           try { localStorage.setItem('cached_mark6_history_v2', JSON.stringify(liveDraws)); } catch {}
           setLastSyncTime(new Date().toLocaleTimeString());
-          if (prevTopId && liveDraws[0].draw_number !== prevTopId) {
+          if ((prevTopId && liveDraws[0].draw_number !== prevTopId) || !statsRef.current || statsRef.current.totalDraws < 1000) {
             fetchStats();
           }
         }
@@ -718,15 +802,8 @@ export default function App() {
 
       if (!results) {
         let currentDraws = allDraws;
-        if (currentDraws.length === 0) {
-          const drawsCol = collection(db, 'draws');
-          const q = query(drawsCol, orderBy('date', 'desc'));
-          const snapshot = await getDocs(q);
-          const fetchedDraws: Draw[] = [];
-          snapshot.forEach(docSnap => {
-            fetchedDraws.push(docSnap.data() as Draw);
-          });
-          currentDraws = fetchedDraws;
+        if (currentDraws.length < 1000) {
+          currentDraws = await loadFullHistoryFromCsvAndFirestore();
           setAllDraws(currentDraws);
         }
 

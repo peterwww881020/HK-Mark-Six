@@ -88,6 +88,51 @@ initCacheFromCsv();
 
 let activeRefreshPromise: Promise<void> | null = null;
 
+function computeStatsSummary(draws: Draw[]) {
+  const freqMap: Record<number, number> = {};
+  const extraFreqMap: Record<number, number> = {};
+
+  draws.forEach(draw => {
+    [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
+      freqMap[n] = (freqMap[n] || 0) + 1;
+    });
+    extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
+  });
+
+  const main = Object.entries(freqMap)
+    .map(([num, freq]) => ({ num: parseInt(num, 10), frequency: freq }))
+    .sort((a, b) => b.frequency - a.frequency);
+
+  const extra = Object.entries(extraFreqMap)
+    .map(([num, freq]) => ({ num: parseInt(num, 10), frequency: freq }))
+    .sort((a, b) => b.frequency - a.frequency);
+
+  const oldestDrawDate = draws[draws.length - 1]?.date;
+  const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '1993';
+
+  return {
+    main,
+    extra,
+    totalDraws: draws.length,
+    oldestYear,
+    latestDraw: draws[0] || null
+  };
+}
+
+async function persistStatsSummary(draws: Draw[]) {
+  if (draws.length < 1000) return;
+  try {
+    const summary = computeStatsSummary(draws);
+    await setDoc(doc(db, 'meta', 'stats'), {
+      ...summary,
+      nextDraw: getNextDrawSchedule(draws[0]),
+      updatedAt: Date.now()
+    });
+  } catch (err: any) {
+    console.warn("Could not write meta/stats summary to Firestore:", err.message);
+  }
+}
+
 async function refreshCache(): Promise<void> {
   if (activeRefreshPromise) return activeRefreshPromise;
   isFetchingDraws = true;
@@ -103,6 +148,7 @@ async function refreshCache(): Promise<void> {
       if (newDraws.length > 0) {
         cachedDraws = newDraws;
         console.log(`Cache refreshed with ${cachedDraws.length} draws from Firestore.`);
+        persistStatsSummary(cachedDraws).catch(() => {});
       }
     } catch (err: any) {
       console.error("Error fetching draws from firestore", err.message);
@@ -531,43 +577,30 @@ async function startServer() {
 
   // Unified bootstrap endpoint (History + Stats + Next Draw in 1 fast roundtrip)
   app.get("/api/bootstrap", async (req, res) => {
+    // Only wait briefly for initial Firestore refresh so cold-start requests never time out on mobile
     if (activeRefreshPromise) {
-      try { await activeRefreshPromise; } catch {}
+      try {
+        await Promise.race([
+          activeRefreshPromise,
+          new Promise<void>(resolve => setTimeout(resolve, cachedDraws.length > 0 ? 1500 : 5000))
+        ]);
+      } catch {}
     }
     if (Date.now() - lastSyncTimestamp > 3 * 60 * 1000) {
       syncRecentDraws().catch(console.error);
     }
     const limitCount = req.query.limit ? parseInt(req.query.limit as string) : 50;
-    const freqMap: Record<number, number> = {};
-    const extraFreqMap: Record<number, number> = {};
-    
-    cachedDraws.forEach(draw => {
-      [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
-        freqMap[n] = (freqMap[n] || 0) + 1;
-      });
-      extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
-    });
-
-    const stats = Object.entries(freqMap)
-      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-      .sort((a, b) => b.frequency - a.frequency);
-
-    const extraStats = Object.entries(extraFreqMap)
-      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-      .sort((a, b) => b.frequency - a.frequency);
-
-    const oldestDrawDate = cachedDraws[cachedDraws.length - 1]?.date;
-    const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '1993';
+    const summary = computeStatsSummary(cachedDraws);
 
     res.json({
       history: cachedDraws.slice(0, isNaN(limitCount) ? 50 : limitCount),
       stats: {
-        main: stats,
-        extra: extraStats,
-        totalDraws: cachedDraws.length,
-        oldestYear,
+        main: summary.main,
+        extra: summary.extra,
+        totalDraws: summary.totalDraws,
+        oldestYear: summary.oldestYear,
       },
-      latestDraw: cachedDraws[0] || null,
+      latestDraw: summary.latestDraw,
       nextDraw: getNextDrawSchedule(cachedDraws[0]),
       lastSyncTimestamp
     });
@@ -584,33 +617,14 @@ async function startServer() {
   });
 
   app.get("/api/stats", (req, res) => {
-    const freqMap: Record<number, number> = {};
-    const extraFreqMap: Record<number, number> = {};
-    
-    cachedDraws.forEach(draw => {
-      [draw.n1, draw.n2, draw.n3, draw.n4, draw.n5, draw.n6].forEach(n => {
-        freqMap[n] = (freqMap[n] || 0) + 1;
-      });
-      extraFreqMap[draw.extra_number] = (extraFreqMap[draw.extra_number] || 0) + 1;
-    });
-
-    const stats = Object.entries(freqMap)
-      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-      .sort((a, b) => b.frequency - a.frequency);
-
-    const extraStats = Object.entries(extraFreqMap)
-      .map(([num, freq]) => ({ num: parseInt(num), frequency: freq }))
-      .sort((a, b) => b.frequency - a.frequency);
-
-    const oldestDrawDate = cachedDraws[cachedDraws.length - 1]?.date;
-    const oldestYear = oldestDrawDate ? oldestDrawDate.split('-')[0] : '';
+    const summary = computeStatsSummary(cachedDraws);
 
     res.json({
-      main: stats,
-      extra: extraStats,
-      totalDraws: cachedDraws.length,
-      oldestYear,
-      latestDraw: cachedDraws[0],
+      main: summary.main,
+      extra: summary.extra,
+      totalDraws: summary.totalDraws,
+      oldestYear: summary.oldestYear,
+      latestDraw: summary.latestDraw,
       nextDraw: getNextDrawSchedule(cachedDraws[0]),
       lastSyncTimestamp
     });
