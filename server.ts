@@ -47,31 +47,27 @@ function initCacheFromCsv() {
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      const cols = line.split(',');
-      if (cols.length < 9) continue;
-      const rawId = cols[0].trim();
-      const rawDate = cols[1].trim();
-      const n1 = parseInt(cols[2], 10);
-      const n2 = parseInt(cols[3], 10);
-      const n3 = parseInt(cols[4], 10);
-      const n4 = parseInt(cols[5], 10);
-      const n5 = parseInt(cols[6], 10);
-      const n6 = parseInt(cols[7], 10);
-      const extra_number = parseInt(cols[8], 10);
-      if (isNaN(n1) || isNaN(extra_number)) continue;
+      const m = line.match(/^([^,]+),(\d{2})\/(\d{2})\/(\d{4}),"([\d,]+)",(\d+)/);
+      if (!m) continue;
 
-      let draw_number = rawId;
-      if (rawId.includes('/')) {
-        const parts = rawId.split('/');
-        const yr = parts[0].padStart(2, '0');
-        const num = parts[1].padStart(3, '0');
-        draw_number = `${yr}/${num}`;
-      }
+      const rawId = m[1].trim();
+      const isoDate = `${m[4]}-${m[3]}-${m[2]}`;
+      const nums = m[5].split(',').map(Number).sort((a, b) => a - b);
+      const extra_number = parseInt(m[6], 10);
+      if (nums.length !== 6 || nums.some(isNaN) || isNaN(extra_number)) continue;
+
+      const idMatch = rawId.match(/^(\d{4})(\d{1,3})/);
+      const draw_number = idMatch ? `${idMatch[1].slice(2)}/${idMatch[2].padStart(3, '0')}` : rawId;
 
       initialDraws.push({
-        date: rawDate,
+        date: isoDate,
         draw_number,
-        n1, n2, n3, n4, n5, n6,
+        n1: nums[0],
+        n2: nums[1],
+        n3: nums[2],
+        n4: nums[3],
+        n5: nums[4],
+        n6: nums[5],
         extra_number
       });
     }

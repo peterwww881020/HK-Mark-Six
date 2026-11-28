@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { performDrawsSync } from "./_syncCore";
+import { performDrawsSync } from "./_syncCore.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {

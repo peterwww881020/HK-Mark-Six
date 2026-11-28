@@ -391,29 +391,28 @@ export default function App() {
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
-          const cols = line.split(',');
-          if (cols.length < 9) continue;
-          const rawId = cols[0].trim();
-          const rawDate = cols[1].trim();
-          const n1 = parseInt(cols[2], 10);
-          const n2 = parseInt(cols[3], 10);
-          const n3 = parseInt(cols[4], 10);
-          const n4 = parseInt(cols[5], 10);
-          const n5 = parseInt(cols[6], 10);
-          const n6 = parseInt(cols[7], 10);
-          const extra_number = parseInt(cols[8], 10);
-          if (isNaN(n1) || isNaN(extra_number)) continue;
+          const m = line.match(/^([^,]+),(\d{2})\/(\d{2})\/(\d{4}),"([\d,]+)",(\d+)/);
+          if (!m) continue;
 
-          let draw_number = rawId;
-          if (rawId.includes('/')) {
-            const parts = rawId.split('/');
-            draw_number = `${parts[0].padStart(2, '0')}/${parts[1].padStart(3, '0')}`;
-          }
+          const rawId = m[1].trim();
+          const isoDate = `${m[4]}-${m[3]}-${m[2]}`;
+          const nums = m[5].split(',').map(Number).sort((a, b) => a - b);
+          const extra_number = parseInt(m[6], 10);
+          if (nums.length !== 6 || nums.some(isNaN) || isNaN(extra_number)) continue;
+
+          const idMatch = rawId.match(/^(\d{4})(\d{1,3})/);
+          const draw_number = idMatch ? `${idMatch[1].slice(2)}/${idMatch[2].padStart(3, '0')}` : rawId;
+
           drawMap.set(draw_number, {
             id: i,
-            date: rawDate,
+            date: isoDate,
             draw_number,
-            n1, n2, n3, n4, n5, n6,
+            n1: nums[0],
+            n2: nums[1],
+            n3: nums[2],
+            n4: nums[3],
+            n5: nums[4],
+            n6: nums[5],
             extra_number
           });
         }
@@ -422,9 +421,12 @@ export default function App() {
       console.warn("Static CSV fallback load notice:", err);
     }
 
-    // 2. Overlay latest draws from Firestore so newly synced draws after the CSV cutoff are included
+    // 2. Overlay latest draws from Firestore (or full collection if CSV didn't load)
     try {
-      const q = query(collection(db, 'draws'), orderBy('date', 'desc'), limit(200));
+      const drawsCol = collection(db, 'draws');
+      const q = drawMap.size >= 1000
+        ? query(drawsCol, orderBy('date', 'desc'), limit(200))
+        : query(drawsCol, orderBy('date', 'desc'));
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
         const d = docSnap.data() as Draw;
@@ -785,11 +787,11 @@ export default function App() {
       // Primary: Fast backend check across all 4,400 cached draws (1993-present)
       let results: CheckResult[] | null = null;
       try {
-        const res = await fetch('/api/check', {
+        const res = await fetchWithTimeout('/api/check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ numbers: numbersToCheck })
-        });
+        }, 8000);
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.wins)) {
@@ -797,7 +799,7 @@ export default function App() {
           }
         }
       } catch (apiErr) {
-        console.warn("Backend /api/check unavailable, falling back to direct Firestore query:", apiErr);
+        console.warn("Backend /api/check unavailable, falling back to full 1993+ client check:", apiErr);
       }
 
       if (!results) {

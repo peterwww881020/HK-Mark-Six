@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/**/*.ts": {
+      "includeFiles": "{firebase-applet-config.json,public/assets/aistudio/mark6_history_ace94645.csv}"
+    }
+  },
   "crons": [
     {
       "path": "/api/cron",

@@ -1,25 +1,26 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getFirebaseDb, Draw } from "./_syncCore";
+import { getFirebaseDb, Draw } from "./_syncCore.js";
 import { collection, query, orderBy, limit, getDocs } from "firebase/firestore";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   try {
-    const limitParam = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const limitParam = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
     const count = isNaN(limitParam) ? 50 : Math.min(limitParam, 200);
 
     const db = getFirebaseDb();
     const q = query(collection(db, "draws"), orderBy("date", "desc"), limit(count));
     const snap = await getDocs(q);
     const data: Draw[] = [];
-    snap.forEach(d => {
+    snap.forEach((d) => {
       data.push(d.data() as Draw);
     });
 
